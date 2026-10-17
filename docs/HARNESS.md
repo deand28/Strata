@@ -11,6 +11,41 @@ chat. Model status shows the model name, context capacity, and whether it is loa
 Optional [local voice conversation](VOICE.md) adds CPU speech recognition, Windows
 spoken replies, pause detection, and interruption around the same chat.
 
+## Reclaim model resources
+
+Use the sidebar **Model power** switch to turn Strata Off when you are done. Off gracefully
+unloads the main model, vision encoder, and loaded speech-recognition model, releasing
+their GPU/model RAM while the HTTP server and interface remain available. Drafts,
+browser history, skills, connection settings, and model configuration are retained.
+The engine's native prompt cache is released; the next chat rebuilds it from its history.
+
+Off is explicit and persistent. Chat, OpenAI/Responses/Anthropic generation, direct load
+endpoints, image generation, and voice requests cannot wake the model. Send and voice
+Start are disabled. Skill/connection management still works; enabled MCP server processes
+are not stopped by this model switch. The ordinary temporary unload endpoint remains
+available when power is On and retains its upstream auto-reload behavior.
+
+If a generation, queue, tool round, or native speech job is busy, Off reports busy and
+keeps that work running. The browser ends its microphone/playback session without
+cancelling an active model answer. Wait for the work, or use its Stop control, then retry
+Off. No process is force-killed by the switch during an active request.
+
+**On** reloads the existing verified model configuration. The sidebar shows Loading and
+elapsed time; loading can take a minute or more. Failed loading leaves power Off and
+shows a retry message. Whisper remains lazy and loads only when voice is used again.
+
+The ignored `.harness-data/power.json` stores `{"version":1,"enabled":false}` when Off.
+This is read before engine/vision construction, so restarting the server does not wake
+an Off model. A missing file preserves the normal initial On behavior. Do not delete
+the file to reclaim resources; use the switch so loaded resources are released too.
+The same data-directory option that holds skills and connections selects this state file.
+
+`GET /power` reports state. `POST /power {"enabled":false}` requests Off;
+`POST /power {"enabled":true}` starts a background On operation and returns Loading
+until ready. Power changes use same-origin JSON, Host and API authentication checks.
+These endpoints and admission guards exist only in harness mode. Without the harness,
+upstream auto-loading and unload behavior are unchanged.
+
 ## Start without a model
 
 From the repository root, using Python with Strata's existing Python dependencies:
@@ -134,10 +169,12 @@ The implementation is in `serve/harness.py`, with small opt-in hooks in `server.
 mode. No frontend dependency or build step is required.
 
 ```powershell
-python -m unittest serve.test_harness serve.test_mcp serve.test_web_sampling serve.test_frontend serve.test_server
-python -m py_compile serve/harness.py serve/server.py serve/mcp.py
+python -m unittest serve.test_power serve.test_replicas serve.test_voice serve.test_harness serve.test_mcp serve.test_web_sampling serve.test_frontend serve.test_server
+python -m py_compile serve/power.py serve/replicas.py serve/voice.py serve/harness.py serve/server.py serve/mcp.py
 node --check serve/web/app.js
 node --check serve/web/harness.js
+node --check serve/web/power.js
+node serve/test_power_ui.js
 git diff --check
 ```
 
@@ -147,6 +184,13 @@ skill CRUD, disabled defaults, secret preservation/removal/redaction, selected t
 enforcement, real MCP calls and streamed activity, origin/body checks, and the unchanged
 default HTML/health payload. It needs no GPU or model. The GitHub workflow runs these
 checks on Windows and Linux without invoking setup or building an engine.
+
+The power tests also cover persistent Off startup, model/vision/Whisper release,
+On failure/retry behavior, all generation and speech wake paths, busy/FIFO protection,
+and a request delayed between early load and generation admission.
+They also prove a delayed background replica healer cannot restart after Off. A Node
+test defers status responses to verify polling cannot overwrite a completed toggle or
+re-enable Generate during an image job.
 
 For browser review, check desktop and 390-pixel mobile layouts; import/edit/delete a
 skill, select it, create a new empty chat and verify both counts reset; create/test/enable

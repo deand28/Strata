@@ -31,6 +31,14 @@ body[data-harness] { display:grid; grid-template-columns:248px minmax(0,1fr); gr
 .h-engine-dot { width:7px; height:7px; border-radius:50%; background:var(--st-ink-muted); flex:none; }
 .h-engine-dot[data-state="ready"] { background:var(--st-accent); box-shadow:0 0 0 3px var(--st-accent-tint); }
 .h-engine-dot[data-state="error"] { background:var(--st-danger); }
+.h-power { margin-top:14px; padding:14px 4px 0; border-top:1px solid var(--st-line); }
+.h-power-row { display:flex; gap:10px; align-items:center; justify-content:space-between; }
+.h-power-row strong { display:block; font-size:12px; font-weight:500; }
+.h-power-row small { display:block; color:var(--st-ink-muted); font-size:10px; margin-top:3px; }
+.h-power-switch { border:1px solid var(--st-line); color:var(--st-ink-muted); background:var(--st-surface); border-radius:20px; min-width:47px; min-height:29px; font:500 11px var(--st-font); cursor:pointer; }
+.h-power-switch[aria-checked="true"] { color:var(--st-accent-text); background:var(--st-accent-tint); border-color:var(--st-accent); }
+.h-power-switch:disabled { cursor:wait; opacity:.65; }
+.h-power-error { color:var(--st-danger-text); font-size:10px; line-height:1.5; margin:8px 0 0; overflow-wrap:anywhere; }
 .h-top-title { display:flex; flex-direction:column; gap:2px; }
 .h-top-title strong { font-size:15px; font-weight:500; }
 .h-top-title span { font-size:11px; color:var(--st-ink-muted); }
@@ -107,6 +115,9 @@ body[data-harness] { display:grid; grid-template-columns:248px minmax(0,1fr); gr
   .h-new { font-size:0; padding:0; justify-content:center; margin-bottom:12px; }
   .h-nav button { justify-content:center; font-size:0; padding:13px; gap:0; } .h-nav button > span { display:none; }
   .h-section-label, .h-engine, .h-history { display:none; } .h-bottom { margin-top:auto; }
+  .h-power { padding:12px 0 0; margin-top:12px; } .h-power-row { flex-direction:column; gap:7px; }
+  .h-power-row strong { font-size:9px; text-align:center; } .h-power-row small { font-size:8px; text-align:center; }
+  .h-power-error { position:fixed; bottom:12px; left:82px; right:12px; background:var(--st-surface); padding:10px; border:1px solid var(--st-line); border-radius:10px; z-index:5; }
   [data-harness] .st-header { padding:0 16px; } .h-top-title span { display:none; }
   [data-harness] .st-header #pill { font-size:10px; } [data-harness] .chat-empty { margin-top:15vh; }
   [data-harness] .chat-empty__title { font-size:30px; } .h-library-inner { padding:28px 18px; }

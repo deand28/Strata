@@ -27,7 +27,7 @@
     $("v-state").textContent = {off: "Ready", checking: "Checking local voice…", listening: "Listening", transcribing: "Transcribing on this PC…", thinking: "Strata is replying…", speaking: "Speaking", stopping: "Stopping…", error: "Voice paused"}[next] || next;
     $("v-help").textContent = detail || "Speak, choose Finish turn, then hear the answer. The microphone pauses while Strata replies.";
     $("v-start").hidden = session.active || next === "checking";
-    $("v-start").disabled = next === "checking";
+    $("v-start").disabled = next === "checking" || !!(window.harnessPower && window.harnessPower.state !== "on");
     $("v-finish").hidden = next !== "listening";
     $("v-interrupt").hidden = !session.active || next === "listening" || next === "stopping";
     $("v-end").hidden = !session.active;
@@ -73,7 +73,8 @@
     try {
       const c = await refresh();
       if (panel.hidden) return;
-      status("off", c.stt.available ? "Speech is processed on this PC. Start when you are ready to allow the microphone." : c.stt.message);
+      status("off", window.harnessPower && window.harnessPower.state !== "on" ? "Turn model power on in the sidebar to use voice." :
+        c.stt.available ? "Speech is processed on this PC. Start when you are ready to allow the microphone." : c.stt.message);
     } catch (e) { if (!panel.hidden) status("error", e.message); }
   };
   $("v-close").onclick = () => { end(); panel.hidden = true; trigger.setAttribute("aria-expanded", "false"); };
@@ -86,6 +87,7 @@
   $("v-auto").onchange = () => { prefs.auto = $("v-auto").checked; store.set("voice", prefs); };
   $("v-finish").onclick = () => finishRecording?.();
   $("v-start").onclick = async () => {
+    if (window.harnessPower && window.harnessPower.state !== "on") return status("off", "Turn model power on in the sidebar before starting voice.");
     if (busy) return status("off", "Wait for the current answer, or stop it before starting voice.");
     if ($("input").value.trim()) return status("off", "Send or clear your typed draft before starting voice.");
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
@@ -233,6 +235,8 @@
   window.addEventListener("harness-chat-start", e => { if (session.active && e.detail.voiceToken !== session.generation) end(false); });
   $("input").addEventListener("input", () => { if (session.active) end(); });
   window.addEventListener("harness-workspace-change", () => end());
+  window.addEventListener("harness-power-off", () => end(false));
+  window.addEventListener("harness-power-change", e => { if (e.detail.state !== "on") end(false); });
   $("stop-btn").addEventListener("click", () => { if (session.active) end(); });
   window.addEventListener("pagehide", () => end());
   document.addEventListener("visibilitychange", () => { if (document.hidden) end(); });

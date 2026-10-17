@@ -58,6 +58,10 @@ the page ends voice and prevents delayed transcript submission or audio playback
 Interrupting a pending native transcription discards its result; the bounded CPU job
 may finish on the server before another recording can be transcribed.
 
+The sidebar Model power switch also ends microphone/playback. Power Off releases a
+loaded Whisper model and blocks speech requests until On. If a native speech job is
+still running, Off reports busy so it can finish safely; retry after it finishes.
+
 ## Browser and device support
 
 Use a current Chrome or Edge browser at the loopback address. A secure context and

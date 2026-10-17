@@ -780,13 +780,16 @@ function assistantMessages(m) {
 
 function setBusy(on) {
   $("stop-btn").hidden = !on;
-  $("send-btn").disabled = on;
+  $("send-btn").disabled = on || !!(window.harnessPower && window.harnessPower.state !== "on");
   $("composer-hint").textContent = on ? "" : "Shift+Enter: new line";
 }
 
 async function send(options = {}) {
   const text = $("input").value.trim();
   if ((!text && !attachments.length) || busy) return;
+  if (window.harnessPower && window.harnessPower.state !== "on") {
+    toast("info", "Model power is off", "Turn it on in the sidebar when you are ready. Your draft is kept."); return;
+  }
   if (window.STRATA_HARNESS) window.dispatchEvent(new CustomEvent("harness-chat-start", {detail: options}));
   messages.push({role: "user", text, images: attachments.filter((a) => a.kind !== "file"),
                  files: attachments.filter((a) => a.kind === "file"), time: Date.now()});
@@ -1108,9 +1111,13 @@ $("img-form").onsubmit = async (ev) => {
   ev.preventDefault();
   const prompt = $("img-prompt").value.trim();
   if (!prompt) return;
+  if (window.STRATA_HARNESS && (window.harnessImageBusy || (window.harnessPower && window.harnessPower.state !== "on"))) {
+    toast("info", "Image generation is unavailable", "Wait for the current image, or turn model power on."); return;
+  }
   const body = {prompt, size: $("img-size").value, response_format: "b64_json"};
   if ($("img-seed").value !== "") body.seed = Number($("img-seed").value);
   $("img-go").disabled = true;
+  if (window.STRATA_HARNESS) window.harnessImageBusy = true;
   const t0 = performance.now();
   $("img-hint").textContent = "Generating\u2026 (a minute or more on a small GPU)";
   try {
@@ -1132,6 +1139,7 @@ $("img-form").onsubmit = async (ev) => {
     $("img-hint").textContent = "";
     toast("error", "No image", String(e.message || e), 8000);
   } finally {
-    $("img-go").disabled = false;
+    if (window.STRATA_HARNESS) window.harnessImageBusy = false;
+    $("img-go").disabled = !!(window.harnessPower && window.harnessPower.state !== "on");
   }
 };

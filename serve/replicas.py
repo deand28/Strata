@@ -24,6 +24,7 @@ the host threads of the engines (the expert workers) do not compete.  "replica_c
 from __future__ import annotations
 
 import collections
+import contextlib
 import copy
 import os
 import threading
@@ -191,6 +192,7 @@ class ReplicaEngine:
         d["heal_at"] = [0.0] * len(engines)
         d["routed"] = [0] * len(engines)
         d["gen_seen"] = [getattr(e, "gen", 0) for e in engines]
+        d["power_admission"] = None              # optional harness lease for background healing
 
     # ---- attribute plumbing
     @property
@@ -370,10 +372,11 @@ class ReplicaEngine:
 
             def run(k=k):
                 try:
-                    print(f"[strata] replica {k} had stopped; starting it again", flush=True)
-                    self.engines[k].restart()
-                    self.router.forget(k)
-                    print(f"[strata] replica {k} is running again", flush=True)
+                    with self.power_admission() if self.power_admission else contextlib.nullcontext():
+                        print(f"[strata] replica {k} had stopped; starting it again", flush=True)
+                        self.engines[k].restart()
+                        self.router.forget(k)
+                        print(f"[strata] replica {k} is running again", flush=True)
                 except BaseException as x:       # noqa: BLE001
                     print(f"[strata] replica {k} did not start again: {x}", flush=True)
                 finally:
