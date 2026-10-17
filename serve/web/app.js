@@ -103,7 +103,9 @@ async function loadHealth() {
     health = await (await fetch("health")).json();
     $("attach-btn").title = health.images ? "Attach a text file or a picture (or drop it here)"
                                           : "Attach a text file (or drop it here)";
-    $("chat-empty-sub").textContent = `${health.model} runs on this PC. Nothing leaves it.`;
+    $("chat-empty-sub").textContent = window.STRATA_HARNESS
+      ? "Your model runs on this PC. Add skills and connect tools when you choose."
+      : `${health.model} runs on this PC. Nothing leaves it.`;
     $("tab-btn-images").hidden = !health.image_generation;
     if (location.hash === "#images" && health.image_generation) showTab("images");
   } catch (e) {
@@ -579,6 +581,7 @@ let busy = null;                      // {controller, msg}
 function saveChat() {
   store.set("chat", messages.map((m) => ({...m, images: (m.images || []).map((i) => ({name: i.name})),
                                            files: (m.files || []).map((f) => ({name: f.name}))})));
+  if (window.STRATA_HARNESS) window.dispatchEvent(new Event("harness-chat-saved"));
 }
 function timeStr(t) { return new Date(t).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}); }
 
@@ -809,6 +812,7 @@ async function send() {
   if (settings.max) body.max_tokens = +settings.max;
   if (projectionLoaded()) body.experimental_speed_projection = !!settings.esp;
   if (settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;   // this server may run MCP tools for it
+  if (window.harnessRequest) window.harnessRequest(body);
 
   let firstAt = null, thinkStart = null, usage = null, frame = 0;
   const paint = () => { frame = 0; updateAssistant(el, m, true); scrollDown(); };

@@ -1,5 +1,10 @@
 <h1 align="center">Strata</h1>
 
+This personal fork adds an opt-in local chat harness with reusable skills, MCP connections,
+and per-chat tool choices. See [Personal harness setup and development](docs/HARNESS.md).
+The engine and original Strata interface remain available; the upstream project is
+[Niko1221/Strata](https://github.com/Niko1221/Strata).
+
 **English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Español](README.es.md) · [Português](README.pt-BR.md)
 
 <p align="center"><b>Run a 125-billion-parameter AI model on your own gaming PC</b><br>

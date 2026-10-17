@@ -3165,6 +3165,7 @@ class Service:
         self.started_at = time.time()
         self.status_lock = threading.Lock()
         self.mcp = None                                  # serve/mcp.py's McpHub when MCP servers are configured
+        self.harness = None                              # opt-in local skills and selected MCP tools
         # sharing the GPU with other programs (all off by default): unload the engine after this many idle seconds,
         # only start it again when this much VRAM is free, and run this command first (e.g. to unload another
         # server's model); the next request after an unload starts the engine again
@@ -5371,6 +5372,10 @@ def make_handler(svc: Service):
 
         def do_GET(self):
             path = self.path.split("?")[0].rstrip("/")
+            if path == "/harness":
+                if self._authorized():
+                    self._json(200, svc.harness.snapshot()) if svc.harness else self._json(404, {"error": {"message": "Harness mode is off"}})
+                return
             if path.startswith("/fonts/"):
                 # the web app's font (Outfit, OFL: serve/web/fonts); the page falls back to the system font
                 name = path[len("/fonts/"):]
@@ -5452,6 +5457,10 @@ def make_handler(svc: Service):
                 return
             if path == "" or (path == "/api-monitor" and svc.api_monitor):
                 body = (ROOT / "serve" / "web" / ("monitor.html" if path else "index.html")).read_bytes()
+                if svc.harness is not None and not path:
+                    body = body.replace(b"</head>", b'<link rel="stylesheet" href="web/harness.css"></head>')
+                    body = body.replace(b"<body>", b'<body data-harness="true">')
+                    body = body.replace(b'<script src="web/app.js"></script>', b'<script>window.STRATA_HARNESS=true;</script><script src="web/app.js"></script><script src="web/harness.js"></script>')
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -5461,7 +5470,7 @@ def make_handler(svc: Service):
                 self._json(200, {"status": "ok", "max_context": svc.reported_ctx(), "model": svc.model,
                                  "images": svc.vision is not None, "api_key": bool(svc.api_key),
                                  "image_generation": svc.images is not None,
-                                 "loaded": svc.loaded(), "service": "strata"})
+                                 "loaded": svc.loaded(), "service": "strata", **({"harness": True} if svc.harness else {})})
             elif path.startswith("/v1/images/files/"):
                 # response_format url: the name (32 random hex digits) is the access, as an OpenAI image URL is
                 f = svc.images.file(path[len("/v1/images/files/"):]) if svc.images is not None else None
@@ -5545,6 +5554,9 @@ def make_handler(svc: Service):
             if not self._authorized():
                 return
             path = self.path.split("?")[0].rstrip("/")   # issue #55: Claude Code posts /v1/messages?beta=true
+            if path == "/harness":
+                self._harness_post()
+                return
             if path.startswith("/v1/") and self._foreign_page():
                 return
             if path == "/settings":
@@ -5927,7 +5939,53 @@ def make_handler(svc: Service):
             finally:
                 items.close()
 
+        def _harness_own(self):
+            # Harness permissions never inherit trusted/cors origins from a model config.
+            origin = (self.headers.get("Origin") or "").rstrip("/")
+            if origin and origin not in ("http://" + self.headers.get("Host", ""), "https://" + self.headers.get("Host", "")):
+                self._json(403, {"error": {"message": "Harness access is limited to this server's own page"}})
+                return False
+            if not self.headers.get("Content-Type", "").startswith("application/json"):
+                self._json(415, {"error": {"message": "send application/json"}})
+                return False
+            return True
+
+        def _harness_post(self):
+            if svc.harness is None:
+                self._json(404, {"error": {"message": "Harness mode is off"}})
+                return
+            if not self._harness_own():
+                return
+            from serve.harness import MAX_BODY, HarnessError
+            try:
+                # A separate small limit for settings; image-bearing chat requests retain
+                # their normal upstream limit. Read chunked bodies with the same cap.
+                self.body_read = True
+                if self._chunked():
+                    body = self._read_chunked(MAX_BODY)
+                else:
+                    size = int(self.headers.get("Content-Length", 0))
+                    if not 0 <= size <= MAX_BODY:
+                        raise HarnessError("Harness settings are limited to 256 KiB", 413)
+                    body = self.rfile.read(size)
+                    if len(body) != size:
+                        raise HarnessError("Incomplete request body")
+                result = svc.harness.mutate(json.loads(body or b"{}"))
+                self._json(200, result)
+            except (ValueError, OSError) as e:
+                status = getattr(e, "status", 500 if isinstance(e, OSError) else 400)
+                message = "Harness data could not be saved; check the local data directory" if isinstance(e, OSError) else str(e)
+                self._json(status, {"error": {"message": svc.harness.redact(message)}})
+
         def _openai(self, req):
+            if svc.harness is None:
+                return self._openai_base(req)
+            if not self._harness_own():
+                return
+            with svc.harness.request(req) as (prepared, hub):
+                return self._openai_base(prepared, hub)
+
+        def _openai_base(self, req, harness_hub=None):
             req = svc.with_shared(req, "openai")
             bias_api.normalize(req.get("logit_bias"), len(getattr(svc.tok, "tokens", ())) or None)
             messages, tools, kw = openai_to_messages(req)
@@ -5941,13 +5999,14 @@ def make_handler(svc: Service):
             svc.load()
             max_req = max_new = int(req.get("max_completion_tokens") or req.get("max_tokens") or 0)   # 0/-1: the rest
             bias_api.validate_request(req, svc.engine, len(getattr(svc.tok, "tokens", ())) or None)
-            use_mcp = req.get("strata_mcp") is True and svc.mcp is not None      # the web app's opt-in (serve/mcp.py)
+            request_hub = harness_hub if harness_hub is not None else svc.mcp
+            use_mcp = req.get("strata_mcp") is True and request_hub is not None
             own = {t.get("name") for t in tools or [] if isinstance(t, dict)}   # #592: a second line of defence
             if use_mcp:
                 if not self._own_page("MCP tools can be used"):   # tools run with the user's rights on this PC
                     return
-                svc.mcp.wait(10)                                  # servers still starting (only right after start)
-                extra = svc.mcp.template_tools(exclude=own)       # the request's own tools win a name clash
+                request_hub.wait(10)
+                extra = request_hub.template_tools(exclude=own)
                 use_mcp = bool(extra)
                 tools = (tools or []) + extra or None
             if force and use_mcp:
@@ -5959,7 +6018,7 @@ def make_handler(svc: Service):
             self._watch_client(cancel)                       # #430 #431 (#1999: before prepare, which can take long)
             ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force, req=req, cancel=cancel)
             _debug_req("openai", req, messages, tools, max_new, thinking, len(ids))
-            run = run_with_mcp(svc, svc.mcp, messages, tools, kw, ids, thinking, max_new, max_req, req, cancel,
+            run = run_with_mcp(svc, request_hub, messages, tools, kw, ids, thinking, max_new, max_req, req, cancel,
                                {t["name"] for t in extra}) if use_mcp else None
             chunks = openai_chunks(svc, req, ids, thinking, tools, max_new, cancel, run=run, force=force)
             if validator is not None:
@@ -6802,6 +6861,8 @@ def default_model_name(cfg: dict) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--engine", choices=["mock", "strata"], default="mock")
+    ap.add_argument("--harness", action="store_true", help="enable the local skills and MCP harness (localhost only)")
+    ap.add_argument("--harness-data-dir", help="local harness state and secrets directory (default: .harness-data)")
     ap.add_argument("--config", help="strata engine config (JSON: exe, args, cwd, tokenizer, model_name), "
                                      "written by setup.py")
     ap.add_argument("--host", default=None,
@@ -6847,6 +6908,8 @@ def main() -> int:
                          "[{\"gpus\": [0, 1]}, {\"gpus\": [2, 3]}])")
     a = ap.parse_args()
     cfg = read_config(a.config) if a.config else {}
+    a.harness = a.harness or cfg.get("harness") is True
+    a.harness_data_dir = a.harness_data_dir or cfg.get("harness_data_dir") or str(ROOT / ".harness-data")
     split_joined_args(cfg)
     lift_reasoning_effort_arg(cfg)
     if a.replicas is not None:
@@ -6854,6 +6917,8 @@ def main() -> int:
     if a.gpu is not None:
         cfg["gpu"] = int(a.gpu) if a.gpu.strip().isdigit() else a.gpu
     a.host = a.host or cfg.get("host") or "127.0.0.1"   # issue #26: the run scripts pass no --host, the config can
+    if a.harness and a.host not in ("127.0.0.1", "localhost", "::1"):
+        ap.error("--harness only listens on localhost (127.0.0.1, localhost, or ::1)")
     try:                                                # before the minutes of loading: is the port free?
         Server((a.host, a.port), BaseHTTPRequestHandler).server_close()
     except OSError as e:
@@ -6873,7 +6938,8 @@ def main() -> int:
         merges = (tpath / "merges.txt").read_text(encoding="utf-8").split("\n")
         types = json.loads((tpath / "token_type.json").read_text())
         tok = ST.Tokenizer(tokens, merges, types)
-    hub = hub_from_config(cfg, a.mcp_config)            # before the minutes of loading: a bad entry stops here
+    # Harness connections are explicit local choices; never import model-config MCP credentials.
+    hub = None if a.harness else hub_from_config(cfg, a.mcp_config)
     if a.engine == "strata":
         if not cfg:
             ap.error("--engine strata needs --config")
@@ -7091,6 +7157,12 @@ def main() -> int:
                       ", ".join(f"{k}={v}" for k, v in svc.shared.items()), flush=True)
         except (OSError, ValueError):
             svc.shared = {}
+    if a.harness:
+        import atexit
+        from serve.harness import Harness
+        svc.harness = Harness(a.harness_data_dir)
+        atexit.register(svc.harness.close)
+        print(f"[strata] personal harness enabled; local data: {svc.harness.path}", flush=True)
     if hub is not None:
         import atexit
         svc.mcp = hub
@@ -7139,7 +7211,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n[strata] stopping (Ctrl+C again to end the engine at once) ...", flush=True)
         closers = [httpd.shutdown, getattr(engine, "close", None), vision.shutdown if vision else None,
-                   hub.close if hub is not None else None]
+                   hub.close if hub is not None else None, svc.harness.close if svc.harness else None]
         for close in filter(None, closers):
             try:
                 close()
