@@ -8,6 +8,9 @@ The sidebar contains recent browser chats, Skills, Connections, Monitor, and Mod
 settings. Each chat starts with zero selected skills and tools. Choices stay with that
 chat. Model status shows the model name, context capacity, and whether it is loaded.
 
+Optional [local voice conversation](VOICE.md) adds CPU speech recognition, Windows
+spoken replies, pause detection, and interruption around the same chat.
+
 ## Start without a model
 
 From the repository root, using Python with Strata's existing Python dependencies:
@@ -31,9 +34,11 @@ installation's config if that installation should remain unchanged.
 python -m serve.server --engine strata --config strata-harness.json --host 127.0.0.1 --port 8080 --harness
 ```
 
-Use the Python executable from the working installation's virtual environment if this
-checkout has no virtual environment of its own. On the current PC, that is the sibling
-`Strata/.venv/Scripts/python.exe`. Run the command from this fork's root.
+Use this fork's own `.venv/Scripts/python.exe` on the current PC; it contains the core
+Strata dependencies and optional local voice dependencies. Engine/CUDA library paths
+still point to the working installation through the ignored run config. For a checkout
+without its own environment, a compatible existing Strata environment can serve as a
+fallback for text chat. Run commands from this fork's root.
 
 Only run one real engine at a time on a 12 GB GPU. Stop the existing Strata server before
 launching the harness with its model. Do not rerun setup, download the model again, or

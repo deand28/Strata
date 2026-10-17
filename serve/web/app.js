@@ -784,9 +784,10 @@ function setBusy(on) {
   $("composer-hint").textContent = on ? "" : "Shift+Enter: new line";
 }
 
-async function send() {
+async function send(options = {}) {
   const text = $("input").value.trim();
   if ((!text && !attachments.length) || busy) return;
+  if (window.STRATA_HARNESS) window.dispatchEvent(new CustomEvent("harness-chat-start", {detail: options}));
   messages.push({role: "user", text, images: attachments.filter((a) => a.kind !== "file"),
                  files: attachments.filter((a) => a.kind === "file"), time: Date.now()});
   attachments = [];
@@ -810,6 +811,7 @@ async function send() {
   }
   if (settings.seed) body.seed = +settings.seed;
   if (settings.max) body.max_tokens = +settings.max;
+  if (options.voiceToken != null) { body.reasoning_effort = "none"; body.max_tokens = 768; }
   if (projectionLoaded()) body.experimental_speed_projection = !!settings.esp;
   if (settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;   // this server may run MCP tools for it
   if (window.harnessRequest) window.harnessRequest(body);
@@ -883,6 +885,7 @@ async function send() {
   updateAssistant(el, m, false);
   saveChat();
   scrollDown();
+  return m;
 }
 
 $("composer").onsubmit = (e) => { e.preventDefault(); send(); };

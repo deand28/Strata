@@ -88,6 +88,7 @@
     });
   }
   function switchChat(id) {
+    window.dispatchEvent(new Event("harness-workspace-change"));
     if (busy) return toast("warn", "Stop the answer first");
     const next = chats.find(c => c.id === id);
     if (!next) return;
@@ -98,6 +99,7 @@
     store.set("chat", messages); persist(); renderChat(); renderHistory(); renderChoices(); navigate("chat");
   }
   function newChat() {
+    window.dispatchEvent(new Event("harness-workspace-change"));
     if (busy) return toast("warn", "Stop the answer first");
     if (!messages.length && !current.skills.length && !current.tools.length && chats.some(c => c.id === activeId)) return navigate("chat");
     const c = {id: crypto.randomUUID(), title: "New chat", skills: [], tools: [], messages: []};
@@ -108,6 +110,7 @@
   sidebar.querySelector(".h-brand").onclick = e => { e.preventDefault(); navigate("chat"); };
   sidebar.querySelectorAll("[data-view]").forEach(b => b.onclick = () => navigate(b.dataset.view));
   function navigate(name) {
+    if (name !== "chat") window.dispatchEvent(new Event("harness-workspace-change"));
     view = name;
     const custom = name === "skills" || name === "connections";
     showTab(custom ? "chat" : name);

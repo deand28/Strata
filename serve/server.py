@@ -3166,6 +3166,7 @@ class Service:
         self.status_lock = threading.Lock()
         self.mcp = None                                  # serve/mcp.py's McpHub when MCP servers are configured
         self.harness = None                              # opt-in local skills and selected MCP tools
+        self.voice = None                                # optional local speech, only in harness mode
         # sharing the GPU with other programs (all off by default): unload the engine after this many idle seconds,
         # only start it again when this much VRAM is free, and run this command first (e.g. to unload another
         # server's model); the next request after an unload starts the engine again
@@ -5372,6 +5373,10 @@ def make_handler(svc: Service):
 
         def do_GET(self):
             path = self.path.split("?")[0].rstrip("/")
+            if path == "/voice/status":
+                if self._authorized():
+                    self._json(200, svc.voice.status()) if svc.harness and svc.voice else self._json(404, {"error": {"message": "Local voice is available only in harness mode"}})
+                return
             if path == "/harness":
                 if self._authorized():
                     self._json(200, svc.harness.snapshot()) if svc.harness else self._json(404, {"error": {"message": "Harness mode is off"}})
@@ -5458,9 +5463,9 @@ def make_handler(svc: Service):
             if path == "" or (path == "/api-monitor" and svc.api_monitor):
                 body = (ROOT / "serve" / "web" / ("monitor.html" if path else "index.html")).read_bytes()
                 if svc.harness is not None and not path:
-                    body = body.replace(b"</head>", b'<link rel="stylesheet" href="web/harness.css"></head>')
+                    body = body.replace(b"</head>", b'<link rel="stylesheet" href="web/harness.css"><link rel="stylesheet" href="web/voice.css"></head>')
                     body = body.replace(b"<body>", b'<body data-harness="true">')
-                    body = body.replace(b'<script src="web/app.js"></script>', b'<script>window.STRATA_HARNESS=true;</script><script src="web/app.js"></script><script src="web/harness.js"></script>')
+                    body = body.replace(b'<script src="web/app.js"></script>', b'<script>window.STRATA_HARNESS=true;</script><script src="web/app.js"></script><script src="web/harness.js"></script><script src="web/voice-state.js"></script><script src="web/voice.js"></script>')
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -5554,6 +5559,9 @@ def make_handler(svc: Service):
             if not self._authorized():
                 return
             path = self.path.split("?")[0].rstrip("/")   # issue #55: Claude Code posts /v1/messages?beta=true
+            if path.startswith("/voice/"):
+                self._voice_post(path)
+                return
             if path == "/harness":
                 self._harness_post()
                 return
@@ -5949,6 +5957,31 @@ def make_handler(svc: Service):
                 self._json(415, {"error": {"message": "send application/json"}})
                 return False
             return True
+
+        def _voice_post(self, path):
+            if not svc.harness or svc.voice is None or path not in ("/voice/transcribe", "/voice/synthesize"):
+                self._json(404, {"error": {"message": "Local voice endpoint is unavailable"}})
+                return
+            if not self._harness_own():
+                return
+            from serve.voice import MAX_JSON_BYTES, VoiceError
+            try:
+                self.body_read = True
+                if self._chunked():
+                    raw = self._read_chunked(MAX_JSON_BYTES)
+                else:
+                    size = int(self.headers.get("Content-Length", 0))
+                    if not 0 <= size <= MAX_JSON_BYTES:
+                        raise VoiceError("Voice request is too large", 413)
+                    raw = self.rfile.read(size)
+                    if len(raw) != size:
+                        raise VoiceError("Incomplete voice request")
+                request = json.loads(raw or b"{}")
+                operation = svc.voice.transcribe if path == "/voice/transcribe" else svc.voice.synthesize
+                self._json(200, operation(request))
+            except ValueError as e:
+                message = str(e) if isinstance(e, VoiceError) else "Send valid JSON for the voice request"
+                self._json(getattr(e, "status", 400), {"error": {"message": message}})
 
         def _harness_post(self):
             if svc.harness is None:
@@ -7160,7 +7193,9 @@ def main() -> int:
     if a.harness:
         import atexit
         from serve.harness import Harness
+        from serve.voice import LocalVoice
         svc.harness = Harness(a.harness_data_dir)
+        svc.voice = LocalVoice(cfg.get("voice"))
         atexit.register(svc.harness.close)
         print(f"[strata] personal harness enabled; local data: {svc.harness.path}", flush=True)
     if hub is not None:

@@ -1,0 +1,21 @@
+.v-trigger { height:32px; padding:0 11px; font-size:12px; }
+.v-trigger[aria-pressed="true"] { color:var(--st-accent-text); border-color:var(--st-accent); }
+.v-panel { max-width:820px; margin:0 auto 12px; padding:15px 18px; background:var(--st-surface); border:1px solid var(--st-line); border-radius:15px; font-size:12px; }
+.v-head { display:flex; align-items:center; gap:12px; }
+.v-head strong { font-size:14px; font-weight:500; }
+.v-head > button { margin-left:auto; width:26px; height:26px; }
+.v-state { color:var(--st-ink-muted); font-size:11px; }
+.v-panel[data-state="listening"] .v-state { color:var(--st-accent-text); }
+.v-panel[data-state="error"] .v-state { color:var(--st-danger-text); }
+.v-help, .v-fallback { margin:5px 0 12px; color:var(--st-ink-muted); line-height:1.65; }
+.v-settings { display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin:10px 0 13px; }
+.v-settings label { display:flex; align-items:center; gap:7px; }
+.v-settings select { width:220px; max-width:100%; font-size:11px; height:30px; padding:2px 7px; }
+.v-settings input { accent-color:var(--st-accent); }
+.v-actions { display:flex; gap:7px; flex-wrap:wrap; }
+.v-actions button { font-size:11px; height:33px; padding:0 12px; }
+.v-transcript { color:var(--st-ink-soft); max-height:64px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; margin-top:10px; line-height:1.6; }
+.v-transcript:empty { display:none; }
+.v-fallback { margin-top:12px; }
+.v-fallback a { color:var(--st-accent-text); }
+@media(max-width:760px) { .v-panel { padding:12px; max-height:46vh; overflow:auto; } .v-settings { gap:8px; } .v-settings select { width:180px; } .v-head { gap:8px; } .v-head strong { font-size:12px; } }
