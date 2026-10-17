@@ -5,6 +5,7 @@ No request can select a model path, download a model, or write an audio file.
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.util
 import io
 import json
@@ -76,6 +77,7 @@ class LocalVoice:
         self.decoder = decoder or decode_audio
         self.runner = runner or subprocess.run
         self.model = None
+        self.power = None
         self.stt_lock, self.tts_lock = threading.Lock(), threading.Lock()
         self.state = "unloaded"
         self.error = None
@@ -122,7 +124,30 @@ class LocalVoice:
                 "stt": {"available": ready, "state": self.state if ready else "setup_required", "message": problem or self.error},
                 "tts": {"available": bool(voices), "voices": voices, "message": self.tts_error}}
 
+    def busy(self):
+        return self.stt_lock.locked() or self.tts_lock.locked()
+
+    def unload(self):
+        if not self.stt_lock.acquire(blocking=False):
+            raise VoiceError("Local transcription is busy", 409)
+        try:
+            if not self.tts_lock.acquire(blocking=False):
+                raise VoiceError("Local speech is busy", 409)
+            try:
+                self.model = None
+                self.state, self.error = "unloaded", None
+                import gc
+                gc.collect()
+            finally:
+                self.tts_lock.release()
+        finally:
+            self.stt_lock.release()
+
     def transcribe(self, request):
+        with self.power.admit() if self.power else contextlib.nullcontext():
+            return self._transcribe(request)
+
+    def _transcribe(self, request):
         if not isinstance(request, dict) or not isinstance(request.get("audio"), str):
             raise VoiceError("Send the recorded audio as base64 JSON")
         encoded = request["audio"]
@@ -174,6 +199,10 @@ class LocalVoice:
             self.stt_lock.release()
 
     def synthesize(self, request):
+        with self.power.admit() if self.power else contextlib.nullcontext():
+            return self._synthesize(request)
+
+    def _synthesize(self, request):
         if not isinstance(request, dict):
             raise VoiceError("Send a JSON object")
         text, voice = request.get("text"), request.get("voice", "")

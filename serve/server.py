@@ -68,6 +68,7 @@ from serve.structured import StructuredOutputError, prepare_format, validated_js
 from serve import responses as responses_api  # noqa: E402
 from serve.responses import ResponsesError, error_body as responses_error_body  # noqa: E402
 from serve import images as images_api  # noqa: E402
+from serve.power import ModelPower, PowerError  # noqa: E402
 
 IM_END = "<|im_end|>"
 IMAGE_PAD = "<|image_pad|>"
@@ -308,6 +309,22 @@ class MockEngine:
             if self.delay:
                 time.sleep(self.delay)
             yield t
+
+
+class HarnessMockEngine(MockEngine):
+    """Mock mode's opt-in power lifecycle; upstream MockEngine behavior is unchanged."""
+    def __init__(self, *args, powered=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.running, self.unloaded = powered, not powered
+
+    def alive(self):
+        return self.running
+
+    def unload(self):
+        self.running, self.unloaded = False, True
+
+    def restart(self):
+        self.running, self.unloaded = True, False
 
 
 class EngineDied(RuntimeError):
@@ -3167,6 +3184,7 @@ class Service:
         self.mcp = None                                  # serve/mcp.py's McpHub when MCP servers are configured
         self.harness = None                              # opt-in local skills and selected MCP tools
         self.voice = None                                # optional local speech, only in harness mode
+        self.power = None                                # explicit persistent harness On/Off admission
         # sharing the GPU with other programs (all off by default): unload the engine after this many idle seconds,
         # only start it again when this much VRAM is free, and run this command first (e.g. to unload another
         # server's model); the next request after an unload starts the engine again
@@ -3407,7 +3425,16 @@ class Service:
         except Exception:
             return None
 
+    def power_admission(self):
+        return self.power.admit() if self.power else contextlib.nullcontext()
+
     def ensure_loaded(self):
+        # Guard the actual restart as well as early HTTP/load admission. A request
+        # which passed load() before Off cannot restart the engine from the FIFO.
+        with self.power_admission():
+            return self._ensure_loaded()
+
+    def _ensure_loaded(self):
         """Start the engine if it is not running (unloaded, or it died - issue #27), after the before_load hook and
         the free-VRAM check.  The caller holds self.fifo."""
         if self.loaded() and not self._vision_down():
@@ -3533,6 +3560,10 @@ class Service:
               f"{' Its log: ' + log if log else ''}", flush=True)
 
     def load(self):
+        with self.power_admission():
+            return self._load()
+
+    def _load(self):
         """POST /load and every generation request: start the engine now if it is unloaded (raises GpuBusy)."""
         # a request is on its way: the idle thread must not unload between this and the request's own start
         self.last_request_at = time.time()
@@ -3596,8 +3627,9 @@ class Service:
             if self.vision is not None and hasattr(self.vision, "unload"):
                 self.vision.unload()
             self.vision_held = False
-            print(f"[strata] model unloaded{f' after {idle_for:.0f} s idle' if idle_for else ''}; "
-                  "the next request loads it again", flush=True)
+            wake = "turn model power on in the sidebar to use it again" if self.power and (
+                self.power.state == "unloading" or not self.power.enabled) else "the next request loads it again"
+            print(f"[strata] model unloaded{f' after {idle_for:.0f} s idle' if idle_for else ''}; {wake}", flush=True)
             return "unloaded"
         finally:
             self.fifo.release()
@@ -3906,6 +3938,12 @@ class Service:
 
     @contextlib.contextmanager
     def _turn(self, cancel=None):
+        with self.power_admission():
+            with self._power_turn(cancel):
+                yield
+
+    @contextlib.contextmanager
+    def _power_turn(self, cancel=None):
         """The engine's single turn (self.fifo) for an image encode.  #1999: a client that leaves while this request
         waits for it gives its place up (ClientGone), as a queued generation does (#1619)."""
         if cancel is None:
@@ -4182,7 +4220,8 @@ class Service:
         if ka is not None:
             ka.acquire()
         try:
-            yield from self._run(ids, thinking, tools, max_new, sampling, cancel, force)
+            with self.power_admission():
+                yield from self._run(ids, thinking, tools, max_new, sampling, cancel, force)
         finally:
             if ka is not None:
                 ka.release()
@@ -5373,6 +5412,10 @@ def make_handler(svc: Service):
 
         def do_GET(self):
             path = self.path.split("?")[0].rstrip("/")
+            if path == "/power":
+                if self._authorized():
+                    self._json(200, svc.power.status()) if svc.power else self._json(404, {"error": {"message": "Power control is available only in harness mode"}})
+                return
             if path == "/voice/status":
                 if self._authorized():
                     self._json(200, svc.voice.status()) if svc.harness and svc.voice else self._json(404, {"error": {"message": "Local voice is available only in harness mode"}})
@@ -5465,7 +5508,7 @@ def make_handler(svc: Service):
                 if svc.harness is not None and not path:
                     body = body.replace(b"</head>", b'<link rel="stylesheet" href="web/harness.css"><link rel="stylesheet" href="web/voice.css"></head>')
                     body = body.replace(b"<body>", b'<body data-harness="true">')
-                    body = body.replace(b'<script src="web/app.js"></script>', b'<script>window.STRATA_HARNESS=true;</script><script src="web/app.js"></script><script src="web/harness.js"></script><script src="web/voice-state.js"></script><script src="web/voice.js"></script>')
+                    body = body.replace(b'<script src="web/app.js"></script>', b'<script>window.STRATA_HARNESS=true;</script><script src="web/app.js"></script><script src="web/harness.js"></script><script src="web/voice-state.js"></script><script src="web/voice.js"></script><script src="web/power.js"></script>')
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -5551,7 +5594,20 @@ def make_handler(svc: Service):
 
         def do_POST(self):
             try:
-                self._post()
+                path = self.path.split("?")[0].rstrip("/")
+                # Count the whole request, including prompt/vision preparation, FIFO
+                # waits and tools. Off never cuts active work off between model rounds.
+                controlled = {"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/images/generations",
+                              "/load", "/v1/load", "/voice/transcribe", "/voice/synthesize"}
+                if svc.power and path in controlled:
+                    if not self._authorized():
+                        return
+                    with svc.power.admit():
+                        self._post()
+                else:
+                    self._post()
+            except PowerError as e:
+                self._json(e.status, {"error": {"type": "model_power", "message": str(e)}})
             except BadBody as e:                              # #893: a malformed or oversized chunked body
                 self._json(e.status, {"error": {"type": "invalid_request_error", "message": str(e)}})
 
@@ -5559,6 +5615,9 @@ def make_handler(svc: Service):
             if not self._authorized():
                 return
             path = self.path.split("?")[0].rstrip("/")   # issue #55: Claude Code posts /v1/messages?beta=true
+            if path == "/power":
+                self._power_post()
+                return
             if path.startswith("/voice/"):
                 self._voice_post(path)
                 return
@@ -5957,6 +6016,31 @@ def make_handler(svc: Service):
                 self._json(415, {"error": {"message": "send application/json"}})
                 return False
             return True
+
+        def _power_post(self):
+            if svc.power is None:
+                self._json(404, {"error": {"message": "Power control is available only in harness mode"}})
+                return
+            if not self._harness_own():
+                return
+            self.body_read = True
+            try:
+                if self._chunked():
+                    raw = self._read_chunked(8192)
+                else:
+                    size = int(self.headers.get("Content-Length", 0))
+                    if not 0 <= size <= 8192:
+                        raise PowerError("Power settings are limited to 8 KiB", 413)
+                    raw = self.rfile.read(size)
+                    if len(raw) != size:
+                        raise ValueError()
+                data = json.loads(raw or b"{}")
+                if not isinstance(data, dict) or not isinstance(data.get("enabled"), bool):
+                    raise ValueError()
+                result = svc.power.on() if data["enabled"] else svc.power.off()
+                self._json(202 if result["state"] == "loading" else 200, result)
+            except ValueError:
+                self._json(400, {"error": {"message": "Send JSON with enabled set to true or false"}})
 
         def _voice_post(self, path):
             if not svc.harness or svc.voice is None or path not in ("/voice/transcribe", "/voice/synthesize"):
@@ -6943,6 +7027,7 @@ def main() -> int:
     cfg = read_config(a.config) if a.config else {}
     a.harness = a.harness or cfg.get("harness") is True
     a.harness_data_dir = a.harness_data_dir or cfg.get("harness_data_dir") or str(ROOT / ".harness-data")
+    power = ModelPower(a.harness_data_dir) if a.harness else None
     split_joined_args(cfg)
     lift_reasoning_effort_arg(cfg)
     if a.replicas is not None:
@@ -6982,7 +7067,7 @@ def main() -> int:
         if sampling_defaults:
             pretty = ", ".join(f"{k}={v}" for k, v in sampling_defaults.items())
             print(f"[strata] sampling defaults from the config: {pretty}", flush=True)
-        lazy = a.lazy or cfg.get("lazy_load") is True
+        lazy = a.lazy or cfg.get("lazy_load") is True or (power is not None and not power.enabled)
         if cfg.get("vision"):
             elastic = cfg["vision"].get("elastic") is True and cfg.get("vram_elastic") is True
             print("the vision encoder starts with the first picture (elastic) ..." if elastic else
@@ -6998,7 +7083,8 @@ def main() -> int:
                 vcfg["elastic"] = False
             vision = Vision(vcfg, log=open(cfg["log"], "a", encoding="utf-8") if cfg.get("log") else None,
                             env=vision_env(cfg, env), lazy=lazy)
-        print("model unloaded; the first request loads it ..." if lazy else
+        print("model power is off; turn it on in the harness sidebar ..." if power is not None and not power.enabled else
+              "model unloaded; the first request loads it ..." if lazy else
               "loading the model (the first start takes a minute or two) ...", flush=True)
         warn_budget_over_ram(engine_args(cfg) if "args" in cfg else [])      # #1080
         if layer_split_of(cfg):
@@ -7039,8 +7125,11 @@ def main() -> int:
             print(note, flush=True)
     else:
         effort_end = None
-        engine, vision, sampling_defaults = MockEngine(tok, a.script or [
+        mock = HarnessMockEngine if a.harness else MockEngine
+        engine, vision, sampling_defaults = mock(tok, a.script or [
             "Thinking about it.</think>\n\nHello from the mock engine."]), None, {}
+        if power is not None and not power.enabled:
+            engine.unload()
     # the model's own chat template (exported with its tokenizer), else the original model's
     tpl = tpath / "chat_template.jinja"
     svc = Service(engine, tok, ChatTemplate(tpl if tpl.exists() else ROOT / "serve/chat_template.jinja"),
@@ -7196,6 +7285,7 @@ def main() -> int:
         from serve.voice import LocalVoice
         svc.harness = Harness(a.harness_data_dir)
         svc.voice = LocalVoice(cfg.get("voice"))
+        power.bind(svc)
         atexit.register(svc.harness.close)
         print(f"[strata] personal harness enabled; local data: {svc.harness.path}", flush=True)
     if hub is not None:
