@@ -54,7 +54,7 @@ class Local(unittest.TestCase):
         result = self.v.transcribe({"audio": base64.b64encode(b"recording").decode()})
         self.assertEqual(result["text"], "Hello local voice.")
         self.assertEqual(result["duration"], 1)
-        self.factory.assert_called_once_with(str(self.model), device="cpu", compute_type="int8", cpu_threads=2, local_files_only=True)
+        self.factory.assert_called_once_with(str(self.model.resolve()), device="cpu", compute_type="int8", cpu_threads=2, local_files_only=True)
         options = self.engine.transcribe.call_args.kwargs
         self.assertTrue(options["vad_filter"])
         self.assertFalse(options["condition_on_previous_text"])
