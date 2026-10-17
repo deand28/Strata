@@ -92,6 +92,14 @@ class StdioTransport:
 
     def start(self):
         env = dict(os.environ)
+        if self.cfg.get("_minimal_env"):
+            # The opt-in harness does not pass unrelated ambient provider credentials
+            # to user-configured servers. Keep only ordinary launcher/OS variables.
+            keep = {"path", "systemroot", "systemdrive", "windir", "temp", "tmp", "pathext", "comspec", "userprofile",
+                    "localappdata", "appdata", "homedrive", "homepath", "home", "lang", "lc_all", "programdata",
+                    "programfiles", "programfiles(x86)", "programw6432", "commonprogramfiles",
+                    "commonprogramfiles(x86)", "commonprogramw6432", "os", "processor_architecture"}
+            env = {k: v for k, v in env.items() if k.lower() in keep}
         env.update({str(k): str(v) for k, v in (self.cfg.get("env") or {}).items()})
         command = str(self.cfg["command"])
         # On Windows `npx`, `uvx` and friends are .cmd files that CreateProcess finds only with their extension
@@ -129,7 +137,7 @@ class StdioTransport:
             if line:
                 self.stderr.append(line)
                 if os.environ.get("STRATA_DEBUG"):
-                    print(f"[mcp {self.name}] {line}", flush=True)
+                    print(f"[mcp {self.name}] {self.cfg.get('_redact', str)(line)}", flush=True)
 
     def _read(self):
         for raw in self._lines(self.proc.stdout):
@@ -431,7 +439,8 @@ class McpServer:
         except McpError as e:
             self.status, self.error, self.tools = "failed", str(e), []
             t.close()
-            print(f"[strata] MCP server {self.name!r} did not start: {e}. Its tools are left out; the chat works "
+            error = self.settings.get("_redact", str)(str(e))
+            print(f"[strata] MCP server {self.name!r} did not start: {error}. Its tools are left out; the chat works "
                   "without them.", flush=True)
             return False
 

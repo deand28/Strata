@@ -62,5 +62,12 @@ build-vision-cuda12.bat
 /.ccache/
 /.rocm-win/
 
+# Personal harness runtime: local skills, connection secrets, config, and exports.
+/.harness-data/
+/.strata-harness/
+.env
+.env.local
+.env.*.local
+
 # local Windows HIP packaging output
 dist-hip/
