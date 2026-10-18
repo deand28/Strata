@@ -105,11 +105,18 @@ Create a skill or import a `SKILL.md` in the browser. A skill is Markdown, optio
 with YAML frontmatter containing `name` and `description`. The library supports editing
 and removal. Each skill is limited to 64 KiB of text.
 
-Open **Skills & tools for this chat** above the composer to choose skills. The backend
-loads the selected IDs and adds their complete instructions to the model's system
-context. An existing first system or developer prompt keeps its role and content. Skills grant no
-tools or filesystem access. Instructions must fit the model's context together with
-the conversation and response; Strata reports an error if they do not fit.
+Open **Skills & tools for this chat** above the composer to choose skills. Short skills
+stay inline within a small total budget. Longer skills stay available by ID and are
+fetched only when relevant. The model can search selected skill names and descriptions,
+then read the complete SKILL.md in 10,000-character pages using the read-only
+`strata_skills` tool. Skills grant no tools or filesystem access.
+
+When a chat exceeds the model's context, the browser asks the local model to summarize
+older turns in bounded pieces and retries the current request. It keeps the full
+transcript visible and saved, preserves recent turns when possible, and stores a
+compact per-chat memory for later requests. It reports a clear error if the current
+message alone is too large; current content is never silently discarded. Compaction
+summaries treat quoted documents and tool results as untrusted data.
 
 ## MCP connections and permissions
 

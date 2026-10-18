@@ -129,6 +129,8 @@
   };
   window.harnessChat = {
     selection: () => structuredClone(current.files || {roots: [], tools: []}),
+    getCompaction: () => current.compaction ? structuredClone(current.compaction) : null,
+    setCompaction: value => { if (value) current.compaction = structuredClone(value); else delete current.compaction; persist(); },
     chooseFiles: value => { current.files = structuredClone(value); persist(); },
     showFiles: () => navigate("files")
   };
@@ -170,7 +172,7 @@
       const ready = c.enabled && c.status === "ready";
       return `<label class="h-check"><input type="checkbox" data-kind="tools" value="${esc(t.name)}" ${current.tools.includes(t.name) ? "checked" : ""} ${busy || !ready ? "disabled" : ""}><span><strong>${esc(t.tool)}</strong><small>${esc(t.description || "No description provided")}</small></span></label>`;
     }).join("")}</div>`).join("");
-    $("h-choice-body").innerHTML = `<p class="h-permission">Selected skills enter the model's instructions. Selected tools may run while it answers, with the access provided by their server.</p>
+    $("h-choice-body").innerHTML = `<p class="h-permission">Selected skills are searchable and can be read by the model when relevant. Selected tools may run while it answers, with the access provided by their server.</p>
       ${missing ? '<p class="h-error">Some choices are unavailable. Reconnect their servers, or clear unavailable choices.</p><button class="st-btn st-btn--secondary" id="h-clear-stale">Clear unavailable choices</button>' : ""}
       <div class="h-choice-grid"><div><h3>Skills</h3>${skillRows || '<p class="muted">Add your first skill in Skills.</p>'}</div><div><h3>Tools</h3>${toolRows || '<p class="muted">Configure a connection, test it, then enable and choose tools here.</p>'}</div></div>`;
     $("h-choice-body").querySelectorAll("input[data-kind]").forEach(el => el.onchange = () => choose(el.dataset.kind, el.value, el.checked));

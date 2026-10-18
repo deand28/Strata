@@ -19,6 +19,10 @@ from serve.mcp import DEFAULTS, McpHub
 
 MAX_BODY = 256 * 1024
 ID = re.compile(r"^[sc]_[0-9a-f]{12}$")
+SKILLS_TOOL = "strata_skills"
+SKILL_PAGE_CHARS = 10000
+INLINE_SKILL_CHARS = 4000
+INLINE_SKILLS_BUDGET = 8000
 
 
 class HarnessError(ValueError):
@@ -60,12 +64,13 @@ def skill_fields(content):
 
 class SelectedHub:
     """Only selected tool names can reach a transport, including direct call()."""
-    def __init__(self, hubs, names, redact, guard):
+    def __init__(self, hubs, names, redact, guard, skills=()):
         self.settings = {**DEFAULTS, "timeout_s": 30, "start_timeout_s": 12}
         self.redact = redact
         self.guard = guard
         self._routes, self._owners, self._tools = {}, {}, []
         self.servers = {}
+        self.skills = {skill["id"]: skill for skill in skills}
         for hub in hubs:
             routes = hub.routes()
             for tool in hub.template_tools():
@@ -78,6 +83,24 @@ class SelectedHub:
                     self._tools.append(safe_tool)
                     server = routes[name][0]
                     self.servers[server.name] = server
+        if self.skills:
+            self._routes[SKILLS_TOOL] = (type("LocalSkills", (), {"name": "Selected skills"})(), SKILLS_TOOL)
+            self._tools.append({
+                "name": SKILLS_TOOL,
+                "description": "Search selected skill names and descriptions (omit query to browse), then read relevant skill text in pages before using it. Skills do not grant permissions.",
+                "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "enum": ["search", "read"]},
+                            "query": {"type": "string", "description": "Words related to the task (search)."},
+                            "skill_id": {"type": "string", "description": "ID returned by search (read)."},
+                            "offset": {"type": "integer", "minimum": 0, "description": "Character offset for a page."},
+                            "limit_chars": {"type": "integer", "minimum": 1, "maximum": SKILL_PAGE_CHARS, "description": "Page size, at most 10,000 characters."},
+                        },
+                        "required": ["action"],
+                        "additionalProperties": False,
+                },
+            })
         missing = set(names) - self._routes.keys()
         if missing:
             raise HarnessError("A selected tool is unavailable. Test its enabled connection or update this chat's choices.")
@@ -93,12 +116,72 @@ class SelectedHub:
 
     def call(self, name, arguments, cancel=None):
         if name not in self._owners:
+            if name == SKILLS_TOOL and self.skills:
+                return self._read_selected_skill(arguments)
             return {"ok": False, "text": "error: tool not selected for this chat", "chars": 39,
                     "truncated": False, "ms": 0, "server": None, "tool": name}
         with self.guard():
             result = self._owners[name].call(name, arguments, cancel)
             result["text"] = self.redact(result["text"])
             return result
+
+    def _read_selected_skill(self, arguments):
+        """Search selected skill metadata or return a bounded page of one selected SKILL.md."""
+        import time
+        start = time.monotonic()
+        args = arguments if isinstance(arguments, dict) else {}
+        action = args.get("action")
+        if action == "search":
+            query = args.get("query", "")
+            if not isinstance(query, str) or len(query) > 500:
+                result = {"error": "query must be text up to 500 characters"}
+            else:
+                words = [word.casefold() for word in re.findall(r"[\w-]+", query) if len(word) > 1]
+                found = []
+                for skill in self.skills.values():
+                    haystack = (skill["name"] + " " + skill.get("description", "")).casefold()
+                    score = sum(haystack.count(word) for word in words)
+                    if not words or score:
+                        found.append((score, skill))
+                found.sort(key=lambda pair: (-pair[0], pair[1]["name"].casefold()))
+                try:
+                    offset = int(args.get("offset", 0))
+                    limit = int(args.get("limit", 10))
+                    if offset < 0 or not 1 <= limit <= 25:
+                        raise ValueError()
+                except (TypeError, ValueError):
+                    result = {"error": "offset must be nonnegative and limit must be 1 to 25"}
+                else:
+                    page = found[offset:offset + limit]
+                    result = {"matches": [{"id": s["id"], "name": s["name"],
+                                           "description": s.get("description", "")[:300]}
+                                          for _, s in page],
+                              "total_matches": len(found),
+                              "next_offset": offset + len(page) if offset + len(page) < len(found) else None}
+        elif action == "read":
+            skill_id = args.get("skill_id")
+            skill = self.skills.get(skill_id) if isinstance(skill_id, str) else None
+            if not skill:
+                result = {"error": "skill_id must identify a skill selected for this chat; search selected skills first"}
+            else:
+                try:
+                    offset = int(args.get("offset", 0))
+                    limit = int(args.get("limit_chars", SKILL_PAGE_CHARS))
+                    if offset < 0 or not 1 <= limit <= SKILL_PAGE_CHARS:
+                        raise ValueError()
+                except (TypeError, ValueError):
+                    result = {"error": f"offset must be nonnegative and limit_chars must be 1 to {SKILL_PAGE_CHARS}"}
+                else:
+                    content = skill["content"]
+                    page = content[offset:offset + limit]
+                    result = {"skill_id": skill_id, "name": skill["name"], "offset": offset,
+                              "total_chars": len(content), "content": page,
+                              "next_offset": offset + len(page) if offset + len(page) < len(content) else None}
+        else:
+            result = {"error": "action must be search or read"}
+        rendered = self.redact(json.dumps(result, ensure_ascii=False))
+        return {"ok": "error" not in result, "text": rendered, "chars": len(rendered), "truncated": False,
+                "ms": round((time.monotonic() - start) * 1000), "server": "Selected skills", "tool": SKILLS_TOOL}
 
 
 class Harness:
@@ -310,15 +393,31 @@ class Harness:
                     raise HarnessError(f"Selected {key} must be a list of at most 100 IDs")
                 chosen[key] = list(dict.fromkeys(values))
             contents = [self._find("skills", key) for key in chosen["skills"]]
-            hub = SelectedHub(list(self.hubs.values()), chosen["tools"], self.redact, self.call_guard)
+            inline, deferred = [], []
+            remaining = INLINE_SKILLS_BUDGET
+            for skill in contents:
+                size = len(skill["content"])
+                rendered_size = len(json.dumps(skill["name"], ensure_ascii=False)) + size + 20
+                if size <= INLINE_SKILL_CHARS and rendered_size <= remaining:
+                    inline.append(skill)
+                    remaining -= rendered_size
+                else:
+                    deferred.append(skill)
+            hub = SelectedHub(list(self.hubs.values()), chosen["tools"], self.redact, self.call_guard, deferred)
             out = copy.deepcopy(req)
-            # A selected skill is actual model context, independent of the browser's cards.
+            # Selected skills are attached to this request, independent of browser cards.
             messages = out.get("messages")
             if not isinstance(messages, list):
                 raise HarnessError("messages must be an array")
-            if contents:
-                instruction = "Selected reusable skills for this chat. These instructions grant no tool permissions.\n\n"
-                instruction += "\n\n".join(f"<skill name={json.dumps(s['name'])}>\n{s['content']}\n</skill>" for s in contents)
+            if inline or deferred:
+                sections = ["Selected reusable skills for this chat. These instructions grant no tool permissions."]
+                sections.extend(f"<skill name={json.dumps(s['name'])}>\n{s['content']}\n</skill>" for s in inline)
+                if deferred:
+                    sections.append(
+                        f"This chat also has {len(deferred)} selected long skill(s), available through the {SKILLS_TOOL} "
+                        "tool. Before substantive work, search selected skills with action=search and task words, then "
+                        "read relevant skill content with action=read before following it. Read pages through next_offset=null.")
+                instruction = "\n\n".join(sections)
                 if messages and isinstance(messages[0], dict) and messages[0].get("role") in ("system", "developer"):
                     original = messages[0].get("content", "")
                     if isinstance(original, str):
@@ -329,7 +428,7 @@ class Harness:
                         raise HarnessError("System content must be text or content blocks")
                 else:
                     out["messages"] = [{"role": "system", "content": instruction}, *messages]
-            out["strata_mcp"] = bool(chosen["tools"])
+            out["strata_mcp"] = bool(chosen["tools"] or deferred)
             self.active += 1
         try:
             yield out, hub
