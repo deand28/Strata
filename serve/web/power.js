@@ -21,7 +21,7 @@
       next.state === "unloading" ? "Releasing memory…" : on ? "Ready to use" : next.state === "off" ? "GPU & model RAM released" : "Server unavailable";
     $("h-power-error").hidden = !next.error;
     $("h-power-error").textContent = next.error || "";
-    $("send-btn").disabled = !!busy || !on;
+    $("send-btn").disabled = !!busy || !!window.harnessAttachmentPending || !on;
     $("img-go").disabled = !!window.harnessImageBusy || !on;
     if ($("v-start")) $("v-start").disabled = !on;
     if (was !== next.state) window.dispatchEvent(new CustomEvent("harness-power-change", {detail: next}));
