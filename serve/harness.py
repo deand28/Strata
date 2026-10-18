@@ -202,7 +202,14 @@ class Harness:
                 self.state = data
             except (ValueError, AttributeError):
                 raise HarnessError("Harness state cannot be read; preserve state.json and restore a valid backup", 500) from None
-        # Connections reconnect only on an explicit Test/Enable action after restart.
+        # Enabling a connection is a persistent choice. Restore only those connections after
+        # a server restart; a failed server reports its error but must not prevent chat startup.
+        for item in self.state["connections"]:
+            if item.get("enabled"):
+                try:
+                    self._connect(item)
+                except Exception as exc:  # one broken saved connection must not take down the harness
+                    self.tests[item["id"]] = {"status": "failed", "error": self.redact(str(exc)), "tools": []}
 
     def _save(self):
         tmp = self.path / "state.json.tmp"
