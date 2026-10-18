@@ -11,12 +11,16 @@ import csv
 import io
 import json
 import os
+import re
 import sys
 import zipfile
+from datetime import datetime
 from pathlib import PurePath
+from urllib.parse import urlsplit
 
 MAX_SOURCE = 16 * 1024 * 1024
 MAX_OUTPUT = 24000
+LCPL_MAX = 128 * 1024
 MEMORY = 512 * 1024 * 1024
 _job = None
 
@@ -76,9 +80,55 @@ def clipped(value, limit=MAX_OUTPUT):
     return str(value)[:limit]
 
 
+def lcp_license(data, name, offset):
+    """Describe a lending license without disclosing account/key/link fields."""
+    if len(data) > LCPL_MAX:
+        raise DocumentError("LCP license exceeds the 128 KiB limit")
+    if offset:
+        raise DocumentError("LCP licenses have one metadata range; use offset 0")
+    try:
+        license = json.loads(data.decode("utf-8-sig"))
+    except (UnicodeError, ValueError):
+        raise DocumentError("Invalid LCP license JSON") from None
+    if not isinstance(license, dict) or not isinstance(license.get("encryption"), dict) or not isinstance(license.get("links"), list):
+        raise DocumentError("Invalid LCP license structure")
+    publications = [link for link in license["links"][:100] if isinstance(link, dict) and
+                    (link.get("rel") == "publication" or isinstance(link.get("rel"), list) and "publication" in link["rel"])]
+    if not publications:
+        raise DocumentError("LCP license has no publication link")
+    kinds = {"application/pdf+lcp": "PDF", "application/epub+zip": "EPUB", "application/audiobook+lcp": "audiobook"}
+    formats = sorted({kinds.get(link.get("type"), "protected publication") for link in publications if isinstance(link.get("type"), str)})
+    provider = license.get("provider")
+    try:
+        parsed = urlsplit(provider) if isinstance(provider, str) else None
+        host = parsed.hostname if parsed and parsed.scheme in ("http", "https") else None
+        if not host or len(host) > 255 or not all(ch.isascii() and (ch.isalnum() or ch in ".-") for ch in host):
+            host = None
+    except ValueError:
+        host = None
+    rights = license.get("rights") if isinstance(license.get("rights"), dict) else {}
+    lines = ["[Readium LCP borrowing license; publication text is not in this file]",
+             "Protected publication: " + ", ".join(formats or ["format unspecified"])]
+    if host:
+        lines.append("Provider: " + host)
+    for label, value in (("Issued", license.get("issued")), ("Loan starts", rights.get("start")), ("Loan ends", rights.get("end"))):
+        if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})", value):
+            try:
+                datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            lines.append(label + ": " + value)
+    lines.append("This license does not contain the book pages. Open the .lcpl in a Readium LCP-compatible reader such as Thorium Reader to access the loan. Strata has not downloaded or decrypted the publication or checked the license status/signature.")
+    return {"name": name, "text": f"File: {name}\n" + "\n".join(lines), "unit": "license",
+            "offset": 0, "next_offset": None, "total": 1, "truncated": False,
+            "warning": "License metadata only; no book text was read. Open the .lcpl in an LCP-compatible reader."}
+
+
 def extract(data, name, offset=0, count=4, sheet=None):
     ext = PurePath(name).suffix.lower()
     lines, next_offset, warning = [], None, ""
+    if ext == ".lcpl":
+        return lcp_license(data, name, offset)
     if ext in (".docx", ".xlsx", ".pptx"):
         office_preflight(data)
     if ext == ".pdf":
