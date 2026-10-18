@@ -57,6 +57,7 @@ Missing readers produce a setup message when a document is opened.
 | CSV / TSV | Up to 100 rows and 100 columns per read; UTF-8 or UTF-16 with BOM |
 | PPTX | Text frames and tables; up to 10 slides per read |
 | RTF | Plain text, up to 24,000 characters per range |
+| LCPL | Readium LCP loan-license metadata only (provider, publication format, issue/loan dates); no protected publication text |
 | Text / code / structured data | UTF-8 or UTF-16 with BOM; local files page by byte offset, at most 24,000 source bytes per read |
 | Images | Attach directly for model vision; folder text tools do not decode images |
 
@@ -75,6 +76,12 @@ documents, embedded Office binaries/macros, executable/binary files, and arbitra
 archives are unsupported. Layout, charts, diagrams, embedded objects, headers, footers,
 speaker notes and formatting are not promised as extracted text. No macros or formulas
 are run, and no external document relationships or URLs are fetched.
+An `.lcpl` is a Readium LCP borrowing license, not the PDF or EPUB itself. The reader
+accepts licenses up to 128 KiB, reports only safe metadata, and omits account IDs,
+email, encrypted keys, signatures and publication URLs. It does not contact the
+provider, check loan status or signature, download a publication, or decrypt its
+pages. Open the license in an LCP-compatible reading app, such as Thorium Reader,
+to read the loaned book.
 Video files such as MP4 are not read or transcribed. Attach an existing text transcript
 or SRT/VTT captions to discuss their contents. Legacy Office files must first be saved
 as DOCX/XLSX/PPTX in an office app; the harness does not perform this conversion.
