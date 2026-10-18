@@ -129,8 +129,9 @@ URLs containing embedded credentials, query parameters, or fragments are rejecte
 New connections save disabled. **Test** starts the configured program or HTTP session,
 performs initialize and tools/list, and reports the inventory and connection state.
 It does not call a tool. A disabled test closes its session afterward. **Enable** connects
-and leaves the transport available; **Disable**, edit, or remove closes it. After a server
-restart, saved enabled connections show disconnected until **Test** or a fresh enable.
+and leaves the transport available; **Disable**, edit, or remove closes it. A saved enabled
+connection reconnects automatically when Strata restarts. A connection that cannot start
+shows a failed status and can be retried with **Test**; it does not prevent chat startup.
 
 Enabling a server does not select its tools. Select individual tools above the composer
 for each chat. The backend offers and executes only those names. Calls, arguments,

@@ -132,6 +132,29 @@ class Store(unittest.TestCase):
             with self.h.request({"messages": [], "strata_harness": {"tools": [echo]}}):
                 pass
 
+    def test_restart_restores_only_enabled_connections(self):
+        enabled = self.connection(name="Persistent", enabled=True)
+        disabled = self.connection(name="Dormant")
+        self.h.close()
+        with patch("serve.mcp.subprocess.Popen", wraps=subprocess.Popen) as popen:
+            self.h = Harness(self.temp.name)
+            self.assertEqual(popen.call_count, 1)
+        connections = {c["id"]: c for c in self.h.snapshot()["connections"]}
+        self.assertEqual(connections[enabled["id"]]["status"], "ready")
+        self.assertEqual(connections[disabled["id"]]["status"], "disabled")
+        tool = enabled["id"] + "__echo"
+        with self.h.request({"messages": [], "strata_harness": {"tools": [tool]}}) as (_, hub):
+            self.assertEqual(hub.call(tool, {"text": "restored"})["text"], "restored")
+
+    def test_broken_saved_connection_does_not_block_other_connections(self):
+        broken = self.connection(name="Broken", command="does-not-exist-strata-harness", enabled=True)
+        working = self.connection(name="Working", enabled=True)
+        self.h.close()
+        self.h = Harness(self.temp.name)
+        connections = {c["id"]: c for c in self.h.snapshot()["connections"]}
+        self.assertEqual(connections[broken["id"]]["status"], "failed")
+        self.assertEqual(connections[working["id"]]["status"], "ready")
+
     def test_error_and_log_redaction(self):
         c = self.connection(env={"API_TOKEN": "secret-error-value"})
         log = io.StringIO()
