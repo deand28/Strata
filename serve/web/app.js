@@ -198,7 +198,7 @@ function render(m) {
   if (live.queued > 0) setPill("queued", `${live.queued} queued`);
   if (tab === "monitor") renderMonitor(live, hw, st, eng, h, last, m.requests || [], m.totals, m.requests_kept);
   if (tab === "monitor") renderConvCache(m.conversation_cache);
-  if (tab === "about") renderAbout(eng, hw, st);
+  if (tab === "about") { renderAbout(eng, hw, st); renderExpertVram(eng, hw); }
 }
 
 // #596: the conversation cache - the prompt's state the engine keeps between requests (always), and the whole
@@ -443,15 +443,38 @@ function renderMcp() {
 // ------------------------------------------------------------------ Model settings (GET / POST /config, #564)
 // A few documented keys of the run config (strata-<model>.json), for every client, from the next start on.  The
 // server lists them, checks every value and keeps every other key of the file as it is.
-let cfgKeys = [];
+let cfgKeys = [], cfgVramKey = null;
+function renderExpertVram(eng, hw) {
+  if ($("cfg-vram-card").hidden) return;
+  const cache = eng.expert_cache_mib || 0;
+  const freeMiB = hw.gpu_mem_total == null || hw.gpu_mem_used == null ? null
+    : Math.max(0, (hw.gpu_mem_total - hw.gpu_mem_used) / 1048576);
+  facts($("cfg-vram-facts"), [
+    ["Experts cached", eng.expert_slots ? `${fmt(eng.expert_slots)} (${gb(cache * 1048576)} GB)` : null],
+    ["GPU memory used", hw.gpu_mem_total ? `${gb(hw.gpu_mem_used)} / ${gb(hw.gpu_mem_total, 0)} GB` : null],
+    ["Free VRAM now", freeMiB == null ? null : `${fmt(freeMiB)} MiB`],
+  ]);
+  const proposed = $("cfg-vram-reserve").value.trim() === "" ? 700 : Number($("cfg-vram-reserve").value);
+  const current = cfgVramKey && cfgVramKey.value != null ? Number(cfgVramKey.value) : 700;
+  let advice = "Lowering the reserve may fit more experts after restart; raising it leaves more VRAM for other apps.";
+  if (proposed < current && freeMiB != null && freeMiB < 1536)
+    advice = `Caution: only ${fmt(freeMiB)} MiB is free now. A smaller reserve may push free VRAM below 1 GB; on Windows that can slow or stall generation.`;
+  else if (freeMiB != null && freeMiB < 1024)
+    advice = `Only ${fmt(freeMiB)} MiB is free now. More expert cache may slow or stall generation if Windows pages GPU memory.`;
+  $("cfg-vram-advice").textContent = advice;
+}
 async function loadConfig() {
   let r;
   try { r = await fetch("config", {headers: headers()}); } catch (e) { return; }
-  if (!r.ok) { $("cfg-card").hidden = true; return; }       // no run config, an older server, or no key yet
+  if (!r.ok) { $("cfg-card").hidden = true; $("cfg-vram-card").hidden = true; return; }
   const c = await r.json();
   cfgKeys = c.keys || [];
+  cfgVramKey = cfgKeys.find((k) => k.key === "vram_reserve_mib") || null;
+  $("cfg-vram-card").hidden = !cfgVramKey;
+  if (cfgVramKey) $("cfg-vram-reserve").value = cfgVramKey.value == null ? "" : String(cfgVramKey.value);
   $("cfg-file").textContent = c.file || "";
   $("cfg-form").innerHTML = cfgKeys.map((k, i) => {
+    if (k.key === "vram_reserve_mib") return "";  // shown with live GPU memory above
     const id = `cfg-${i}`, v = k.value;
     let input;
     if (k.kind === "bool" || k.kind === "enum") {
@@ -467,6 +490,7 @@ async function loadConfig() {
     return `<label for="${id}" title="${esc(k.help)}">${esc(k.help)}<code>${esc(k.key)}</code></label>${input}`;
   }).join("");
   $("cfg-card").hidden = false;
+  if (lastMetrics) renderExpertVram(lastMetrics.engine || {}, lastMetrics.hardware || {});
 }
 function configValue(k, el) {
   const s = el.value.trim();
@@ -475,25 +499,39 @@ function configValue(k, el) {
   if (k.kind === "number") return Number(s);
   return s;                                         // enum, or names (the server splits them at commas)
 }
-$("cfg-save").addEventListener("click", async () => {
-  const set = {};
-  cfgKeys.forEach((k, i) => {
-    const v = configValue(k, $(`cfg-${i}`));
-    const old = Array.isArray(k.value) ? k.value.join(", ") : k.value;
-    if (JSON.stringify(v) !== JSON.stringify(old ?? null)) set[k.key] = v;
-  });
-  if (!Object.keys(set).length) { $("cfg-msg").textContent = "Nothing changed."; return; }
+async function saveConfig(set, messageId) {
+  if (!Object.keys(set).length) { $(messageId).textContent = "Nothing changed."; return; }
   try {
     const r = await fetch("config", {method: "POST", headers: headers(true), body: JSON.stringify({set})});
     const b = await r.json();
     if (!r.ok) throw new Error((b.error || {}).message || `HTTP ${r.status}`);
-    $("cfg-msg").textContent = b.changed.length
-      ? `Saved (${b.changed.join(", ")}); the earlier file is ${b.file}.bak. Start the model again to use it.` : "Nothing changed.";
+    $(messageId).textContent = b.changed.length
+      ? `Saved (${b.changed.join(", ")}); start the model again to use it.` : "Nothing changed.";
     loadConfig();
   } catch (e) {
-    $("cfg-msg").textContent = "";
+    $(messageId).textContent = "";
     toast("error", "Not saved", String(e.message || e), 6000);
   }
+}
+$("cfg-vram-reserve").addEventListener("input", () => {
+  if (lastMetrics) renderExpertVram(lastMetrics.engine || {}, lastMetrics.hardware || {});
+});
+$("cfg-vram-save").addEventListener("click", () => {
+  if (!cfgVramKey) return;
+  const input = $("cfg-vram-reserve");
+  if (!input.reportValidity()) return;
+  const value = configValue(cfgVramKey, input);
+  saveConfig({vram_reserve_mib: value}, "cfg-vram-msg");
+});
+$("cfg-save").addEventListener("click", async () => {
+  const set = {};
+  cfgKeys.forEach((k, i) => {
+    if (k.key === "vram_reserve_mib") return;
+    const v = configValue(k, $(`cfg-${i}`));
+    const old = Array.isArray(k.value) ? k.value.join(", ") : k.value;
+    if (JSON.stringify(v) !== JSON.stringify(old ?? null)) set[k.key] = v;
+  });
+  saveConfig(set, "cfg-msg");
 });
 
 // ------------------------------------------------------------------ Markdown (escaped first, then formatted)

@@ -181,6 +181,20 @@
         <span class="card-title">This PC</span>
         <dl class="facts" id="facts-hw"></dl>
       </div>
+      <div class="st-card" id="cfg-vram-card" hidden>
+        <span class="card-title">Expert VRAM</span>
+        <p class="muted small">Strata keeps the most useful experts in GPU memory. Automatic sizing uses the VRAM left
+          after model weights, context, and other buffers. A larger reserve leaves more room for the desktop.</p>
+        <dl class="facts" id="cfg-vram-facts"></dl>
+        <div class="st-field">
+          <label class="st-label" for="cfg-vram-reserve">VRAM reserve for other uses (MiB)</label>
+          <input class="st-input" id="cfg-vram-reserve" type="number" min="0" step="1" placeholder="engine default: 700" autocomplete="off">
+        </div>
+        <p class="muted small" id="cfg-vram-advice" role="status"></p>
+        <div class="cfg-actions"><button class="st-btn st-btn--primary" id="cfg-vram-save" type="button">Save VRAM setting</button>
+          <span class="muted small" id="cfg-vram-msg" role="status"></span></div>
+        <p class="muted small">The change takes effect when the model next starts. Saving does not interrupt a request.</p>
+      </div>
       <div class="st-card">
         <span class="card-title">Connect your tools</span>
         <p class="muted">Any OpenAI- or Anthropic-compatible client works with these addresses.</p>
