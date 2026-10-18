@@ -780,13 +780,14 @@ function assistantMessages(m) {
 
 function setBusy(on) {
   $("stop-btn").hidden = !on;
-  $("send-btn").disabled = on || !!(window.harnessPower && window.harnessPower.state !== "on");
+  $("send-btn").disabled = on || !!window.harnessAttachmentPending || !!(window.harnessPower && window.harnessPower.state !== "on");
   $("composer-hint").textContent = on ? "" : "Shift+Enter: new line";
 }
 
 async function send(options = {}) {
   const text = $("input").value.trim();
   if ((!text && !attachments.length) || busy) return;
+  if (window.harnessAttachmentPending) return toast("info", "Reading attachments", "Wait for local document extraction to finish.");
   if (window.harnessPower && window.harnessPower.state !== "on") {
     toast("info", "Model power is off", "Turn it on in the sidebar when you are ready. Your draft is kept."); return;
   }
@@ -930,19 +931,22 @@ function isTextFile(f) {
          TEXT_EXT.test(f.name) || /(^|[\\/])(makefile|dockerfile|readme|license)$/i.test(f.name);
 }
 function addFiles(files) {
+  const epoch = window.harnessAttachmentEpoch?.();
   for (const f of files) {
     if (f.type.startsWith("image/")) {
       if (!health.images) { toast("warn", "Pictures are off", "This model was set up for text only."); continue; }
       if (f.size > 20e6) { toast("warn", "Picture too large", `${f.name} is over 20 MB.`); continue; }
       const r = new FileReader();
-      r.onload = () => { attachments.push({kind: "image", name: f.name || "pasted image", url: r.result}); renderAttachments(); };
+      r.onload = () => { if (epoch !== window.harnessAttachmentEpoch?.()) return; attachments.push({kind: "image", name: f.name || "pasted image", url: r.result}); renderAttachments(); };
       r.readAsDataURL(f);
       continue;
     }
+    if (window.harnessExtractAttachment) { window.harnessExtractAttachment(f); continue; }
     if (!isTextFile(f)) { toast("warn", "Not a text file", `${f.name}: attach text files (code, notes, logs, data)${health.images ? " or pictures" : ""}.`); continue; }
     if (f.size > MAX_TEXT_FILE) { toast("warn", "File too large", `${f.name} is over 512 KB.`); continue; }
     const r = new FileReader();
     r.onload = () => {
+      if (epoch !== window.harnessAttachmentEpoch?.()) return;
       const text = String(r.result);
       if (text.includes("\u0000")) { toast("warn", "Not a text file", `${f.name} looks like a binary file.`); return; }
       attachments.push({kind: "file", name: f.name, text});

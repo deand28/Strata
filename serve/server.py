@@ -3184,6 +3184,7 @@ class Service:
         self.mcp = None                                  # serve/mcp.py's McpHub when MCP servers are configured
         self.harness = None                              # opt-in local skills and selected MCP tools
         self.voice = None                                # optional local speech, only in harness mode
+        self.files = None                                # explicit read-only folder grants, only in harness mode
         self.power = None                                # explicit persistent harness On/Off admission
         # sharing the GPU with other programs (all off by default): unload the engine after this many idle seconds,
         # only start it again when this much VRAM is free, and run this command first (e.g. to unload another
@@ -5412,6 +5413,10 @@ def make_handler(svc: Service):
 
         def do_GET(self):
             path = self.path.split("?")[0].rstrip("/")
+            if path == "/files":
+                if self._authorized():
+                    self._json(200, svc.files.snapshot()) if svc.files else self._json(404, {"error": {"message": "File access is available only in harness mode"}})
+                return
             if path == "/power":
                 if self._authorized():
                     self._json(200, svc.power.status()) if svc.power else self._json(404, {"error": {"message": "Power control is available only in harness mode"}})
@@ -5508,7 +5513,7 @@ def make_handler(svc: Service):
                 if svc.harness is not None and not path:
                     body = body.replace(b"</head>", b'<link rel="stylesheet" href="web/harness.css"><link rel="stylesheet" href="web/voice.css"></head>')
                     body = body.replace(b"<body>", b'<body data-harness="true">')
-                    body = body.replace(b'<script src="web/app.js"></script>', b'<script>window.STRATA_HARNESS=true;</script><script src="web/app.js"></script><script src="web/harness.js"></script><script src="web/voice-state.js"></script><script src="web/voice.js"></script><script src="web/power.js"></script>')
+                    body = body.replace(b'<script src="web/app.js"></script>', b'<script>window.STRATA_HARNESS=true;</script><script src="web/app.js"></script><script src="web/harness.js"></script><script src="web/files.js"></script><script src="web/voice-state.js"></script><script src="web/voice.js"></script><script src="web/power.js"></script>')
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -5623,6 +5628,9 @@ def make_handler(svc: Service):
                 return
             if path == "/harness":
                 self._harness_post()
+                return
+            if path in ("/files", "/files/extract"):
+                self._files_post(path)
                 return
             if path.startswith("/v1/") and self._foreign_page():
                 return
@@ -6042,6 +6050,47 @@ def make_handler(svc: Service):
             except ValueError:
                 self._json(400, {"error": {"message": "Send JSON with enabled set to true or false"}})
 
+        def _files_post(self, path):
+            if svc.files is None:
+                self._json(404, {"error": {"message": "File access is available only in harness mode"}})
+                return
+            if not self._harness_own():
+                return
+            from serve.files import MAX_JSON
+            from serve.harness import HarnessError
+            try:
+                cap = MAX_JSON if path == "/files/extract" else 8192
+                self.body_read = True
+                if self._chunked():
+                    raw = self._read_chunked(cap)
+                else:
+                    size = int(self.headers.get("Content-Length", 0))
+                    if not 0 <= size <= cap:
+                        raise HarnessError("File request exceeds its size limit", 413)
+                    raw = self.rfile.read(size)
+                    if len(raw) != size:
+                        raise HarnessError("Incomplete file request")
+                request = json.loads(raw or b"{}")
+                if not isinstance(request, dict):
+                    raise HarnessError("File request must be an object")
+                if path == "/files/extract":
+                    import base64
+                    encoded = request.get("data")
+                    if not isinstance(encoded, str):
+                        raise HarnessError("Send base64 file data")
+                    try:
+                        data = base64.b64decode(encoded, validate=True)
+                    except ValueError:
+                        raise HarnessError("File data is not valid base64") from None
+                    result = svc.files.extract(data, request.get("name"), request.get("offset", 0), request.get("count", 100), request.get("sheet"))
+                else:
+                    result = svc.files.mutate(request)
+                self._json(200, result)
+            except (ValueError, OSError) as e:
+                status = getattr(e, "status", 400)
+                message = str(e) if isinstance(e, HarnessError) else "File request could not be read or saved"
+                self._json(status, {"error": {"message": message}})
+
         def _voice_post(self, path):
             if not svc.harness or svc.voice is None or path not in ("/voice/transcribe", "/voice/synthesize"):
                 self._json(404, {"error": {"message": "Local voice endpoint is unavailable"}})
@@ -6100,6 +6149,9 @@ def make_handler(svc: Service):
             if not self._harness_own():
                 return
             with svc.harness.request(req) as (prepared, hub):
+                if svc.files is not None:
+                    with svc.files.request(prepared, hub) as (prepared, hub):
+                        return self._openai_base(prepared, hub)
                 return self._openai_base(prepared, hub)
 
         def _openai_base(self, req, harness_hub=None):
@@ -7283,8 +7335,10 @@ def main() -> int:
         import atexit
         from serve.harness import Harness
         from serve.voice import LocalVoice
+        from serve.files import Files
         svc.harness = Harness(a.harness_data_dir)
         svc.voice = LocalVoice(cfg.get("voice"))
+        svc.files = Files(a.harness_data_dir)
         power.bind(svc)
         atexit.register(svc.harness.close)
         print(f"[strata] personal harness enabled; local data: {svc.harness.path}", flush=True)

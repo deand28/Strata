@@ -1,7 +1,8 @@
 <h1 align="center">Strata</h1>
 
 This personal fork adds an opt-in local chat harness with reusable skills, MCP connections,
-and per-chat tool choices. See [Personal harness setup and development](docs/HARNESS.md).
+local voice, [folder and document reading](docs/FILES.md), and per-chat tool choices.
+See [Personal harness setup and development](docs/HARNESS.md).
 The engine and original Strata interface remain available; the upstream project is
 [Niko1221/Strata](https://github.com/Niko1221/Strata).
 

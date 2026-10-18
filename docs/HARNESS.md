@@ -4,12 +4,16 @@ This fork adds an opt-in workspace around Strata's existing Python server and pl
 JavaScript chat. It keeps the original engine, streaming/Stop, attachments, Markdown
 export, sampling controls, and monitor. MIT attribution and upstream links are retained.
 
-The sidebar contains recent browser chats, Skills, Connections, Monitor, and Model
+The sidebar contains recent browser chats, Skills, Connections, Files, Monitor, and Model
 settings. Each chat starts with zero selected skills and tools. Choices stay with that
 chat. Model status shows the model name, context capacity, and whether it is loaded.
 
 Optional [local voice conversation](VOICE.md) adds CPU speech recognition, Windows
 spoken replies, pause detection, and interruption around the same chat.
+
+Optional [local folder and document reading](FILES.md) adds explicit folder grants,
+per-chat read-only tools and PDF, Office, RTF and structured/text attachments. File
+management and local extraction also work while model power is Off.
 
 ## Reclaim model resources
 
@@ -169,12 +173,14 @@ The implementation is in `serve/harness.py`, with small opt-in hooks in `server.
 mode. No frontend dependency or build step is required.
 
 ```powershell
-python -m unittest serve.test_power serve.test_replicas serve.test_voice serve.test_harness serve.test_mcp serve.test_web_sampling serve.test_frontend serve.test_server
-python -m py_compile serve/power.py serve/replicas.py serve/voice.py serve/harness.py serve/server.py serve/mcp.py
+python -m unittest serve.test_files serve.test_power serve.test_replicas serve.test_voice serve.test_harness serve.test_mcp serve.test_web_sampling serve.test_frontend serve.test_server
+python -m py_compile serve/files.py serve/extract_worker.py serve/power.py serve/replicas.py serve/voice.py serve/harness.py serve/server.py serve/mcp.py
 node --check serve/web/app.js
 node --check serve/web/harness.js
 node --check serve/web/power.js
 node serve/test_power_ui.js
+node --check serve/web/files.js
+node serve/test_files_ui.js
 git diff --check
 ```
 

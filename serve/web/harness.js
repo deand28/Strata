@@ -24,6 +24,7 @@
       <button data-view="chat">${icon("chat")} Chat</button>
       <button data-view="skills">${icon("layers")} Skills <span id="h-skill-count">0</span></button>
       <button data-view="connections">${icon("link")} Connections <span id="h-connection-count">0</span></button>
+      <button data-view="files">${icon("attach")} Files</button>
     </nav>
     <div class="h-section-label">RECENT CHATS</div><div id="h-history" class="h-history"></div>
     <nav class="h-nav h-bottom" aria-label="Model controls">
@@ -101,7 +102,7 @@
   function newChat() {
     window.dispatchEvent(new Event("harness-workspace-change"));
     if (busy) return toast("warn", "Stop the answer first");
-    if (!messages.length && !current.skills.length && !current.tools.length && chats.some(c => c.id === activeId)) return navigate("chat");
+    if (!messages.length && !current.skills.length && !current.tools.length && !current.files?.roots?.length && !current.files?.tools?.length && chats.some(c => c.id === activeId)) return navigate("chat");
     const c = {id: crypto.randomUUID(), title: "New chat", skills: [], tools: [], messages: []};
     chats.unshift(c); switchChat(c.id);
   }
@@ -112,17 +113,24 @@
   function navigate(name) {
     if (name !== "chat") window.dispatchEvent(new Event("harness-workspace-change"));
     view = name;
-    const custom = name === "skills" || name === "connections";
+    const custom = name === "skills" || name === "connections" || name === "files";
     showTab(custom ? "chat" : name);
     panel.hidden = !custom;
+    panel.dataset.view = name;
     if (custom) { $("view-chat").hidden = true; renderLibrary(); }
     sidebar.querySelectorAll("[data-view]").forEach(b => b.setAttribute("aria-current", String(b.dataset.view === name)));
-    $("h-title").textContent = {chat: "Chat", skills: "Skills", connections: "Connections", monitor: "Monitor", about: "Model settings"}[name] || "Chat";
+    $("h-title").textContent = {chat: "Chat", skills: "Skills", connections: "Connections", files: "Files", monitor: "Monitor", about: "Model settings"}[name] || "Chat";
     $("h-subtitle").textContent = custom ? "Make this workspace your own" : "Your local workspace";
   }
   window.harnessRequest = body => {
     delete body.strata_mcp;
     body.strata_harness = {skills: [...current.skills], tools: [...current.tools]};
+    body.strata_files = structuredClone(current.files || {roots: [], tools: []});
+  };
+  window.harnessChat = {
+    selection: () => structuredClone(current.files || {roots: [], tools: []}),
+    chooseFiles: value => { current.files = structuredClone(value); persist(); },
+    showFiles: () => navigate("files")
   };
 
   async function api(body) {
@@ -152,6 +160,7 @@
     if (view === "skills") renderLibrary();
   }
   function renderChoices() {
+    window.dispatchEvent(new Event("harness-choices-change"));
     const allTools = library.connections.flatMap(c => c.tools.map(t => ({...t, connection: c})));
     const missing = current.skills.filter(id => !library.skills.some(s => s.id === id)).length +
       current.tools.filter(id => !allTools.some(t => t.name === id && t.connection.enabled && t.connection.status === "ready")).length;
@@ -174,6 +183,7 @@
     };
   }
   function renderLibrary() {
+    if (view === "files") { window.harnessFiles?.render(panel); return; }
     const skills = view === "skills";
     const items = skills ? library.skills : library.connections;
     panel.innerHTML = `<div class="h-library-inner"><div class="h-library-head"><div><span class="h-eyebrow">YOUR WORKSPACE</span><h1>${skills ? "Reusable instructions." : "Tools, on your terms."}</h1>
