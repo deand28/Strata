@@ -107,6 +107,7 @@ class Local(unittest.TestCase):
             req = {"messages": [{"role": "user", "content": "hello"}], "strata_files": {"roots": [self.root], "tools": ["files__read"]}}
             with h.request(req) as (prepared, hub), self.files.request(prepared, hub) as (prepared, chosen):
                 self.assertTrue(prepared["strata_mcp"]); self.assertEqual(list(chosen.routes()), ["files__read"])
+                self.assertIn("1 selected folders; enabled file tools: files__read", prepared["messages"][0]["content"])
                 self.assertIn("FOLDER MAPLE", chosen.call("files__read", {"root": self.root, "path": "hello.txt"})["text"])
                 self.assertFalse(chosen.call("files__list", {"root": self.root, "path": ""})["ok"])
                 self.assertFalse(chosen.call("files__read", {"root": "r_000000000000", "path": "hello.txt"})["ok"])
@@ -128,11 +129,45 @@ class Local(unittest.TestCase):
             self.assertNotIn("\ufffd", "".join(pieces))
         with self.assertRaises(HarnessError): self.read("utf16.txt", offset=3)
 
+    def test_capability_context_preserves_instructions_without_granting_access(self):
+        h = Harness(self.base / "harness")
+        try:
+            for first in ({"role": "user", "content": "Can you read Word?"},
+                          {"role": "system", "content": "Keep this instruction."},
+                          {"role": "developer", "content": [{"type": "text", "text": "Keep this instruction."}]}):
+                req = {"messages": [first]}
+                before = json.dumps(req)
+                with h.request(req) as (prepared, hub), self.files.request(prepared, hub) as (prepared, chosen):
+                    text = json.dumps(prepared["messages"][0])
+                    self.assertIn("Word DOCX", text)
+                    self.assertIn("read-only", text)
+                    self.assertIn("0 selected folders; enabled file tools: none", text)
+                    self.assertFalse(prepared["strata_mcp"])
+                    self.assertEqual(chosen.routes(), {})
+                    self.assertFalse(chosen.call("files__read", {"root": self.root, "path": "hello.txt"})["ok"])
+                    if first["role"] != "user": self.assertIn("Keep this instruction.", text)
+                self.assertEqual(json.dumps(req), before)
+            self.assertEqual(len(self.files.snapshot()["roots"]), 1, "capability context must not mutate grants")
+        finally: h.close()
+
     def test_text_utf16_binary_unsupported_and_source_limits(self):
         text = self.files.extract("UTF16 BIRCH".encode("utf-16"), "notes.txt")
         self.assertIn("UTF16 BIRCH", text["text"])
         for data, name in ((b"\x00\x01binary", "bad.txt"), (b"legacy", "old.doc"), (b"x", "../notes.txt"), (b"x" * (MAX_SOURCE + 1), "large.pdf")):
             with self.subTest(name=name), self.assertRaises(HarnessError): self.files.extract(data, name)
+
+    def test_unsupported_files_name_the_file_and_explain_video_and_metadata(self):
+        for name, expected in (("lesson.mp4", ".mp4): Video reading/transcription is not available"),
+                               ("old.doc", ".doc): This legacy Office format is unsupported"),
+                               (".DS_Store", "macOS folder metadata"), ("archive.zip", ".zip): Unsupported file type")):
+            with self.subTest(name=name):
+                (self.docs / name).write_bytes(b"test")
+                for read in (lambda: self.files.extract(b"test", name), lambda: self.read(name)):
+                    with self.assertRaises(HarnessError) as error: read()
+                    self.assertIn(name, str(error.exception)); self.assertIn(expected, str(error.exception))
+        # A video above the document size limit still gets a precise unsupported-format diagnostic.
+        with self.assertRaisesRegex(HarnessError, "lesson.mp4.*Video reading"):
+            self.files.extract(b"x" * (MAX_SOURCE + 1), "lesson.mp4")
 
     def test_pdf_pages_and_image_only_are_explicit(self):
         data = pdf_bytes()

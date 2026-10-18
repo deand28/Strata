@@ -1,6 +1,7 @@
 // Harness-only local files. No browser directory grants, cloud parsers or indexing.
 "use strict";
 (() => {
+  $("attach-btn").setAttribute("aria-label", "Attach documents or pictures");
   let state = {roots: [], tools: []}, panel, generation = 0, controllers = new Set(), pending = 0;
   let folder = "", path = "", offset = 0, query = "", last, revision = 0, attachmentQueue = Promise.resolve();
   const choices = document.createElement("details");
@@ -109,7 +110,21 @@
     generation++; revision++; controllers.forEach(c => c.abort()); controllers.clear(); pending = 0; updatePending();
   });
   window.harnessAttachmentEpoch = () => generation;
+  window.harnessDroppedFiles = transfer => {
+    const items = [...transfer.items || []].filter(item => item.kind === "file");
+    const directories = [], files = [];
+    for (const item of items) {
+      let entry;
+      try { entry = item.webkitGetAsEntry?.(); } catch (_) { /* The browser may not expose entries. */ }
+      if (entry?.isDirectory) directories.push(entry.name);
+      else { const file = item.getAsFile(); if (file) files.push(file); }
+    }
+    if (!directories.length) return transfer.files;
+    toast("info", "Use Files to allow folders", `${directories.join(", ")}: open Files, enter the folder's full local path, then choose Allow folder. Select its folder and read tools under Files for this chat. Individual files dropped alongside it are still attached.`, 10000);
+    return files;
+  };
   window.harnessExtractAttachment = file => {
+    if (file.name.toLowerCase() === ".ds_store") return toast("info", "Skipped folder metadata", `${file.name} is a macOS folder settings file, not document content.`);
     if (file.size > 16 * 1024 * 1024) return toast("warn", "Document too large", "Use a file smaller than 16 MiB, or add its folder for paged text reading.");
     const epoch = generation;
     pending++; updatePending();

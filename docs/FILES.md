@@ -21,6 +21,20 @@ attachments retain the existing model vision behavior. You can also attach a pre
 file excerpt from Files. Browsing, extraction and folder management work while model
 power is Off and never load the model; sending the resulting chat still requires On.
 
+Drop individual files onto the chat to attach them. When the browser identifies a
+dropped folder, the harness shows how to allow its full local path in **Files**;
+dropping it never grants access automatically. A mixed drop still attaches its
+individual files. The upload UI skips `.DS_Store`, a macOS folder settings file, and
+reports that it was skipped. Folder listings continue to show the actual files.
+Unsupported-file errors name the file and extension so one unrelated file does not
+look like a failure to read every document in the folder.
+
+The model receives a description of these read-only document capabilities and the
+file tools selected for the current request. This gives it context to interpret
+extracted text; it does not grant access, add tools, edit files or promise complete
+formatting/chart interpretation. Reader errors still take precedence over general
+capability descriptions.
+
 ## Install optional readers
 
 From this checkout, in the Python environment used to launch the server:
@@ -61,6 +75,9 @@ documents, embedded Office binaries/macros, executable/binary files, and arbitra
 archives are unsupported. Layout, charts, diagrams, embedded objects, headers, footers,
 speaker notes and formatting are not promised as extracted text. No macros or formulas
 are run, and no external document relationships or URLs are fetched.
+Video files such as MP4 are not read or transcribed. Attach an existing text transcript
+or SRT/VTT captions to discuss their contents. Legacy Office files must first be saved
+as DOCX/XLSX/PPTX in an office app; the harness does not perform this conversion.
 
 ## Boundaries and storage
 

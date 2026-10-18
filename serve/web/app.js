@@ -101,7 +101,8 @@ let health = {model: "strata", images: false, max_context: 0};
 async function loadHealth() {
   try {
     health = await (await fetch("health")).json();
-    $("attach-btn").title = health.images ? "Attach a text file or a picture (or drop it here)"
+    $("attach-btn").title = window.STRATA_HARNESS ? `Attach documents${health.images ? " or pictures" : ""} (or drop files here)`
+                                          : health.images ? "Attach a text file or a picture (or drop it here)"
                                           : "Attach a text file (or drop it here)";
     $("chat-empty-sub").textContent = window.STRATA_HARNESS
       ? "Your model runs on this PC. Add skills and connect tools when you choose."
@@ -996,7 +997,7 @@ for (const id of ["chat", "composer"]) {
     $("composer").classList.remove("dragging");
     if (!e.dataTransfer || !e.dataTransfer.files.length) return;
     e.preventDefault();
-    addFiles(e.dataTransfer.files);
+    addFiles(window.harnessDroppedFiles ? window.harnessDroppedFiles(e.dataTransfer) : e.dataTransfer.files);
     $("input").focus();
   });
 }
